@@ -1,0 +1,303 @@
+---
+title: "Mock Virome Analysis"
+output: html_notebook
+---
+
+```{r}
+#libraries
+library(ggplot2)
+library(here)
+library(dplyr)
+library(data.table)
+library(stringr)
+library(wesanderson)
+library(tidyr)
+library(forcats)
+```
+
+
+
+```{r}
+color_lookup <- c(
+  "esviritu" = "#90D4CC", 
+  "centrifuger" = "#FBA72A", 
+  "kraken2" = "#D3D4D8", 
+  "metabuli" = "#CB7A5C", 
+  "sylph" = "#5785C1"
+  )
+
+# Map the data using the lookup names
+#mapped_colors <- color_lookup[as.character(my_factor)]
+```
+
+
+# Rank Metrics
+```{r}
+rank_dt <- fread(
+  here::here("data/mock_virome/rank_metrics.tsv"),
+  sep = "\t",
+  header = T
+) |>
+  filter(!grepl("ptaxnone", param_set))
+```
+
+
+
+```{r}
+
+spear_p <- rank_dt |>
+  mutate(
+    tool_mode = paste0(tool, " ", param_set),
+    tool = fct_relevel(tool, "esviritu", "centrifuger", "kraken2", "metabuli", "sylph")
+  ) |>
+  ggplot(aes(x = tool_mode, fill = tool, y = log10(FP))) +
+  geom_col(color = "grey15", position = "dodge") +
+  facet_grid(c(~rank, ~sample)) +
+  scale_fill_manual(values = color_lookup) +
+  theme_bw() +
+  theme(axis.text.x = 
+          element_text(angle = 90, 
+                       vjust = 0.5, 
+                       hjust=1),
+        legend.position = "bottom",
+        strip.text.y = element_text(angle = 0)) 
+
+spear_p
+```
+
+
+```{r}
+
+scat1_p <- rank_dt |>
+  mutate(
+    tool_mode = paste0(tool, " ", param_set),
+    tool = fct_relevel(tool, "esviritu", "centrifuger", "kraken2", "metabuli", "sylph"),
+    mock = gsub("mock_comb", "Community #", sample)
+  ) |>
+  filter(tool != "sylph") |>
+  ggplot(aes(x = bray_curtis_rpm, y = F1, fill = tool, shape = mock)) +
+  geom_point(color = "grey15", size = 4, alpha = 0.85) +
+  facet_grid(~rank) +
+  scale_fill_manual(values = color_lookup) +
+  scale_shape_manual(values = c(21, 22, 23)) +
+  theme_bw() +
+  labs(
+    x = "Bray-Curtis Dissimilarity to Ground Truth",
+    y = "F1 Score, Detections"
+  ) +
+  theme(
+        legend.position = "bottom",
+        strip.text.y = element_text(angle = 0)
+        ) +
+  guides(fill = guide_legend(override.aes = list(shape = 21)))
+
+scat1_p
+```
+
+```{r}
+ggsave(
+  scat1_p,
+  file = here::here("charts/mock_comm_F1_BC_scat1.pdf"),
+  width = 9,
+  height = 5
+)
+```
+
+
+```{r}
+
+scat2_p <- rank_dt |>
+  mutate(
+    tool_mode = paste0(tool, " ", param_set),
+    tool = fct_relevel(tool, "esviritu", "centrifuger", "kraken2", "metabuli", "sylph"),
+    mock = gsub("mock_comb", "Community #", sample)
+  ) |>
+  ggplot(aes(x = log10(1+FP), y = log10(1+TP), fill = tool, shape = mock)) +
+  geom_point(color = "grey15", size = 4, alpha = 0.85) +
+  facet_grid(~rank) +
+  scale_fill_manual(values = color_lookup) +
+  scale_shape_manual(values = c(21, 22, 23)) +
+  theme_bw() +
+  labs(
+    x = "log10(False Positive Taxa)",
+    y = "log10(True Positive Taxa)"
+  ) +
+  theme( 
+        legend.position = "bottom",
+        strip.text.y = element_text(angle = 0)
+        ) +
+  guides(fill = guide_legend(override.aes = list(shape = 21)))
+
+scat2_p
+```
+
+```{r}
+ggsave(
+  scat2_p,
+  file = here::here("charts/mock_comm_TP_FP_scat1.pdf"),
+  width = 9.5,
+  height = 5
+)
+```
+
+# Per-Genome Detection
+```{r}
+detect_dt <- fread(
+  here::here("data/mock_virome/per_genome_detection.tsv"),
+  sep = "\t",
+  header = T
+) |>
+  mutate(
+    tool_mode = paste0(tool, " ", param_set),
+    tool = fct_relevel(tool, "esviritu", "centrifuger", "kraken2", "metabuli", "sylph")
+  )
+```
+
+```{r}
+detect1_p <- detect_dt |>
+  group_by(tool, ani_level, param_set, tool_mode) |>
+  summarize(perc_detect = sum(detected == TRUE) / n()) |>
+  ungroup() |>
+  ggplot(aes(x = ani_level, y = perc_detect, color = tool, group = tool_mode)) +
+  geom_line(size = 1.5, alpha = 0.85) +
+  scale_color_manual(values = color_lookup) +
+  theme_bw() +
+  facet_grid(~tool) +
+  labs(
+    x = "Mock Genome ANI to Reference",
+    y = "Percent Detected"
+  ) +
+  theme(
+    legend.position = "none",
+    strip.text.y = element_text(angle = 0)
+    ) +
+  scale_y_continuous(labels = scales::percent)
+
+detect1_p
+```
+
+```{r}
+ggsave(
+  detect1_p,
+  file = here::here("charts/mock_comm_detect_lines1.pdf"),
+  width = 7,
+  height = 4
+)
+```
+
+```{r}
+detect2_p <- detect_dt |>
+  group_by(tool, ani_level, param_set, tool_mode) |>
+  summarize(perc_detect = sum(detected == TRUE) / n()) |>
+  ungroup() |>
+  ggplot(aes(x = factor(ani_level), y = tool_mode, fill = perc_detect)) +
+  geom_tile() +
+  scale_fill_gradient(
+    low = "white",
+    high = "#175149"
+  ) +
+  theme_bw() +
+  facet_grid(rows = vars(tool), scales = "free_y", space = "free") +
+  theme(axis.text.x = 
+          element_text(angle = 90, 
+                       vjust = 0.5, 
+                       hjust=1),
+        legend.position = "bottom",
+        strip.text.y = element_text(angle = 0))
+
+detect2_p
+```
+
+# Per Genome Detection
+
+```{r}
+file_list <- list.files(path = here::here("data/mock_virome"), 
+                        pattern = "\\.ground_truth.tsv$", 
+                        full.names = TRUE)
+
+# 2. Read all files into a list of data.tables and bind them together
+ground_truth_dt <- rbindlist(lapply(file_list, fread))
+```
+
+```{r}
+per_genome_dt <- fread(
+  here::here("data/mock_virome/per_genome_detection.tsv"),
+  sep = "\t",
+  header = T
+) |>
+  filter(!grepl("ptaxnone", param_set)) |>
+  mutate(param_set = gsub("_ptax10239", "", param_set))
+```
+
+```{r}
+true_reads_dt <- ground_truth_dt |>
+  select(Assembly, ani_level, read_count) |>
+  rename(true_read_count = read_count)
+```
+
+
+```{r}
+perg_p <- per_genome_dt |>
+  filter(
+    tool != "sylph",
+    n_truth_sharing_clade == 1
+    ) |>
+  group_by(ani_level, tool, param_set) |>
+  summarize(p_cor = cor(read_count, assigned_reads, method = "pearson")) |>
+  ggplot(aes(x = param_set, y = p_cor, fill = tool)) +
+  geom_col(color = "grey10") +
+  facet_grid(c(~ani_level, ~tool), scales = "free_x", space = "free") +
+  scale_fill_manual(values = color_lookup) +
+  geom_text(aes(label = round(p_cor, digits = 2), x = param_set), y = 0.2) +
+  theme_bw() +
+  labs(
+    x = "Parameter Set",
+    y = "Pearson Correlation with Ground Truth"
+  ) +
+  theme(axis.text.x = 
+          element_text(angle = 90, 
+                       vjust = 0.5, 
+                       hjust=1),
+        legend.position = "bottom",
+        strip.text.y = element_text(angle = 0))
+
+perg_p
+```
+
+```{r}
+ggsave(
+  perg_p,
+  file = here::here("charts/mock_comm_read_corr_bar1.pdf"),
+  width = 10.5,
+  height = 6
+)
+```
+
+```{r}
+perg2_p <- per_genome_dt |>
+  filter(
+    tool != "sylph",
+    n_truth_sharing_clade == 1
+    ) |>
+  ggplot(aes(x = read_count, y = assigned_reads, color = tool)) +
+  geom_point(alpha = 0.7) +
+  facet_wrap(~ani_level, scales = "free", ncol = 1) +
+  geom_abline(slope = 1, intercept = 0) +
+  scale_color_manual(values = color_lookup) +
+  theme_bw() +
+  theme(axis.text.x = 
+          element_text(angle = 90, 
+                       vjust = 0.5, 
+                       hjust=1),
+        legend.position = "bottom",
+        strip.text.y = element_text(angle = 0))
+
+perg2_p
+```
+
+
+
+
+# Assembly ANI Comparison
+
+
