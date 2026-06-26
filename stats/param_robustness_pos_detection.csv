@@ -1,0 +1,6 @@
+base_tool,n_param_sets,mean_det,sd_det,range_det,cv_det
+EsViritu,1,0.8642857142857143,NA,0,NA
+Centrifuger,1,0.9035714285714286,NA,0,NA
+Kraken2,1,0.9071428571428571,NA,0,NA
+Metabuli,1,0.9964285714285714,NA,0,NA
+Sylph,1,0.09285714285714286,NA,0,NA

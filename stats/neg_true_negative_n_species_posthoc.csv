@@ -1,0 +1,11 @@
+.y.,group1,group2,n1,n2,statistic,p,p.adj,p.adj.signif
+n_species,EsViritu,Centrifuger,6,6,0,1,1,ns
+n_species,EsViritu,Kraken2,6,6,0,0.181,0.233,ns
+n_species,EsViritu,Metabuli,6,6,0,0.059,0.133,ns
+n_species,EsViritu,Sylph,6,6,0,NA,NA,
+n_species,Centrifuger,Kraken2,6,6,0,0.181,0.233,ns
+n_species,Centrifuger,Metabuli,6,6,0,0.059,0.133,ns
+n_species,Centrifuger,Sylph,6,6,1,1,1,ns
+n_species,Kraken2,Metabuli,6,6,0,0.059,0.133,ns
+n_species,Kraken2,Sylph,6,6,6,0.181,0.233,ns
+n_species,Metabuli,Sylph,6,6,15,0.059,0.133,ns

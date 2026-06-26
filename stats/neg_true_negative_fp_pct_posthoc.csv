@@ -1,0 +1,11 @@
+.y.,group1,group2,n1,n2,statistic,p,p.adj,p.adj.signif
+fp_pct,EsViritu,Centrifuger,6,6,0,1,1,ns
+fp_pct,EsViritu,Kraken2,6,6,0,0.181,0.233,ns
+fp_pct,EsViritu,Metabuli,6,6,0,0.031,0.07,ns
+fp_pct,EsViritu,Sylph,6,6,0,NA,NA,
+fp_pct,Centrifuger,Kraken2,6,6,0,0.181,0.233,ns
+fp_pct,Centrifuger,Metabuli,6,6,0,0.031,0.07,ns
+fp_pct,Centrifuger,Sylph,6,6,1,1,1,ns
+fp_pct,Kraken2,Metabuli,6,6,0,0.031,0.07,ns
+fp_pct,Kraken2,Sylph,6,6,6,0.181,0.233,ns
+fp_pct,Metabuli,Sylph,6,6,21,0.031,0.07,ns

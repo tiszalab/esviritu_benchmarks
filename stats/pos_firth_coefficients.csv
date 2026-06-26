@@ -1,0 +1,17 @@
+term,estimate,std.error,statistic,p.value
+(Intercept),20.2,3.341,6.045,1.494e-9
+base_toolCentrifuger,1.371,1.119,1.225,0.2205
+base_toolKraken2,0.8727,1.027,0.8494,0.3956
+base_toolMetabuli,2.353,1.562,1.506,0.1321
+base_toolSylph,-16.27,2.317,-7.019,2.23e-12
+lr_c,2.987,0.4588,6.509,7.558e-11
+accessionOM892302.1,-14.43,3.255,-4.434,9.253e-6
+accessionOR607356.1,-10.59,3.057,-3.464,5.324e-4
+accessionPP228892.1,-18.61,3.285,-5.664,1.475e-8
+accessionPP410071.1,-12.94,3.265,-3.962,7.425e-5
+accessionPP410088.1,-13.18,3.263,-4.039,5.361e-5
+accessionPZ364880.1,-14.9,3.254,-4.578,4.69e-6
+base_toolCentrifuger:lr_c,0.2972,0.6505,0.4569,0.6477
+base_toolKraken2:lr_c,-0.07156,0.6088,-0.1175,0.9064
+base_toolMetabuli:lr_c,-2.071,0.9928,-2.087,0.03693
+base_toolSylph:lr_c,0.6044,1.393,0.4338,0.6644
