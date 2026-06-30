@@ -1,6 +1,6 @@
 neg_class,base_tool,median_fp_pct,mean_fp_pct,median_n_species,max_n_species
-true_negative,EsViritu,0,0,0,0
-true_negative,Centrifuger,0,1.74789950983e-6,0,2
-true_negative,Kraken2,1.2453784007545e-5,8.562586873812166e-5,0.5,8
-true_negative,Metabuli,0.009285723520253301,0.04587178336194591,10.5,59
+true_negative,EsViritu,0,2.0708439183484795e-7,0,1
+true_negative,Centrifuger,0,1.4981995798542856e-6,0,2
+true_negative,Kraken2,2.490756801509e-5,7.857071157140286e-5,1,8
+true_negative,Metabuli,0.0108364485875063,0.04233485562017106,18,71
 true_negative,Sylph,0,0,0,0

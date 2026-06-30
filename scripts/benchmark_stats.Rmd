@@ -269,6 +269,17 @@ neg <- read_csv(paths$neg, show_col_types = FALSE) |>
   group_by(neg_class, sample, base_tool) |>
   summarise(fp_pct = min(fp_pct), n_species = min(n_species),
             .groups = "drop")
+
+sample_info <- tibble(
+  sample = c("SRR32674837", "SRR38307491", "SRR38270014", "SRR38629931", "SRR38746368", "chm13v2_10M", "SRR31273449"),
+  sample_source = c("hot springs", "soil", "freshwater", "anaerobic digester", "mouse RNA", "human genome synthetic reads", "marine water")
+)
+
+neg <- merge(
+  neg,
+  sample_info,
+  by = "sample"
+)
 ```
 
 ```{r}
@@ -358,6 +369,13 @@ neg_full <- read_csv(paths$neg, show_col_types = FALSE) |>
     base_tool = factor_tool(tool),
     neg_class = "true_negative"
     )
+
+neg_full <- merge(
+  neg_full,
+  sample_info,
+  by = "sample"
+)
+
 ```
 
 ```{r}
@@ -366,11 +384,11 @@ n_full_p <- neg_full |>
   filter(!grepl("ptaxnone", settings)) |>
   mutate(settings = gsub("_ptax10239", "", settings)) |>
   distinct() |>
-  ggplot(aes(y = log10(n_species + 1), x = settings, color = sample)) +
+  ggplot(aes(y = log10(n_species + 1), x = settings, color = source_type)) +
   geom_boxplot(outlier.shape = NA, colour = "grey60") +
   scale_colour_manual(values = c(
     "#C52E19", "#AC9765", "#54D8B1", 
-    "#b67c3b", "#175149", "#AF4E24"
+    "#b67c3b", "#175149", "#AF4E24", "grey25"
     )
     ) +
   geom_jitter(width = 0.15, height = 0, size = 2, alpha = 0.8) +
@@ -390,11 +408,11 @@ reads_full_p <- neg_full |>
   filter(!grepl("ptaxnone", settings)) |>
   mutate(settings = gsub("_ptax10239", "", settings)) |>
   distinct() |>
-  ggplot(aes(y = log10(fp_reads + 1), x = settings, color = sample)) +
+  ggplot(aes(y = log10(fp_reads + 1), x = settings, color = source_type)) +
   geom_boxplot(outlier.shape = NA, colour = "grey60") +
   scale_colour_manual(values = c(
     "#C52E19", "#AC9765", "#54D8B1", 
-    "#b67c3b", "#175149", "#AF4E24"
+    "#b67c3b", "#175149", "#AF4E24", "grey25"
     )
     ) +
   geom_jitter(width = 0.15, height = 0, size = 2, alpha = 0.8) +
@@ -414,7 +432,7 @@ reads_full_tile_p <- neg_full |>
   filter(!grepl("ptaxnone", settings)) |>
   mutate(settings = gsub("_ptax10239", "", settings)) |>
   distinct() |>
-  ggplot(aes(fill = log10(fp_reads + 1), y = settings, x = sample)) +
+  ggplot(aes(fill = log10(fp_reads + 1), y = settings, x = source_type)) +
   geom_tile(colour = "grey30") +
   scale_fill_gradient2(
     low = "white",
@@ -443,7 +461,7 @@ sp_full_tile_p <- neg_full |>
   filter(!grepl("ptaxnone", settings)) |>
   mutate(settings = gsub("_ptax10239", "", settings)) |>
   distinct() |>
-  ggplot(aes(fill = log10(n_species + 1), y = settings, x = sample)) +
+  ggplot(aes(fill = log10(n_species + 1), y = settings, x = source_type)) +
   geom_tile(colour = "grey30") +
   scale_fill_gradient2(
     low = "white",
@@ -520,9 +538,8 @@ p <- emm_all |>
                          pearson = "Pearson r")) |>
   ggplot(aes(rank, emmean, colour = tolower(as.character(base_tool)),
              group = base_tool)) +
-  geom_point(aes(y = ))
-  #geom_pointrange(aes(ymin = lower.CL, ymax = upper.CL),
-  #                position = position_dodge(width = 0.5)) +
+  geom_pointrange(aes(ymin = lower.CL, ymax = upper.CL),
+                  position = position_dodge(width = 0.5)) +
   facet_wrap(~ metric, scales = "free_y") +
   scale_colour_manual(values = tool_palette, name = "Tool",
                       labels = function(x) tool_labels[x]) +

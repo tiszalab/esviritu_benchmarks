@@ -75,11 +75,11 @@ scat1_p <- rank_dt |>
     mock = gsub("mock_comb", "Community #", sample)
   ) |>
   filter(tool != "sylph") |>
-  ggplot(aes(x = bray_curtis_rpm, y = F1, fill = tool, shape = mock)) +
-  geom_point(color = "grey15", size = 4, alpha = 0.85) +
+  ggplot(aes(x = bray_curtis_rpm, y = F1, color = tool, shape = mock)) +
+  geom_point(size = 4, alpha = 0.85) +
   facet_grid(~rank) +
-  scale_fill_manual(values = color_lookup) +
-  scale_shape_manual(values = c(21, 22, 23)) +
+  scale_color_manual(values = color_lookup) +
+  scale_shape_manual(values = c(15,16,17,18,19,20)) +
   theme_bw() +
   labs(
     x = "Bray-Curtis Dissimilarity to Ground Truth",
@@ -112,11 +112,11 @@ scat2_p <- rank_dt |>
     tool = fct_relevel(tool, "esviritu", "centrifuger", "kraken2", "metabuli", "sylph"),
     mock = gsub("mock_comb", "Community #", sample)
   ) |>
-  ggplot(aes(x = log10(1+FP), y = log10(1+TP), fill = tool, shape = mock)) +
-  geom_point(color = "grey15", size = 4, alpha = 0.85) +
+  ggplot(aes(x = log10(1+FP), y = log10(1+TP), color = tool, shape = mock)) +
+  geom_point(size = 4, alpha = 0.85) +
   facet_grid(~rank) +
-  scale_fill_manual(values = color_lookup) +
-  scale_shape_manual(values = c(21, 22, 23)) +
+  scale_color_manual(values = color_lookup) +
+  scale_shape_manual(values = c(15,16,17,18,19,20)) +
   theme_bw() +
   labs(
     x = "log10(False Positive Taxa)",
@@ -150,7 +150,8 @@ detect_dt <- fread(
   mutate(
     tool_mode = paste0(tool, " ", param_set),
     tool = fct_relevel(tool, "esviritu", "centrifuger", "kraken2", "metabuli", "sylph")
-  )
+  ) |>
+  filter(!grepl("ptaxnone", tool_mode))
 ```
 
 ```{r}
@@ -208,6 +209,15 @@ detect2_p <- detect_dt |>
 detect2_p
 ```
 
+```{r}
+ggsave(
+  detect2_p,
+  file = here::here("charts/mock_comm_detect_tiles1.pdf"),
+  width = 7,
+  height = 7
+)
+```
+
 # Per Genome Detection
 
 ```{r}
@@ -215,8 +225,14 @@ file_list <- list.files(path = here::here("data/mock_virome"),
                         pattern = "\\.ground_truth.tsv$", 
                         full.names = TRUE)
 
-# 2. Read all files into a list of data.tables and bind them together
-ground_truth_dt <- rbindlist(lapply(file_list, fread))
+
+dt_list <- lapply(file_list, fread)
+names(dt_list) <- basename(file_list)
+
+#ground_truth_dt <- rbindlist(lapply(file_list, fread))
+
+ground_truth_dt <- rbindlist(dt_list, idcol = "filename") |>
+  mutate(sample_ID = gsub("\\..*", "", filename))
 ```
 
 ```{r}
@@ -240,7 +256,8 @@ true_reads_dt <- ground_truth_dt |>
 perg_p <- per_genome_dt |>
   filter(
     tool != "sylph",
-    n_truth_sharing_clade == 1
+    #n_truth_sharing_clade == 1,
+    grepl("_fam", sample)
     ) |>
   group_by(ani_level, tool, param_set) |>
   summarize(p_cor = cor(read_count, assigned_reads, method = "pearson")) |>
@@ -276,12 +293,13 @@ ggsave(
 ```{r}
 perg2_p <- per_genome_dt |>
   filter(
-    tool != "sylph",
-    n_truth_sharing_clade == 1
+    tool == "esviritu",
+    #n_truth_sharing_clade == 1,
+    grepl("_fam", sample)
     ) |>
   ggplot(aes(x = read_count, y = assigned_reads, color = tool)) +
   geom_point(alpha = 0.7) +
-  facet_wrap(~ani_level, scales = "free", ncol = 1) +
+  facet_grid(c(~ani_level, ~param_set), scales = "free") +
   geom_abline(slope = 1, intercept = 0) +
   scale_color_manual(values = color_lookup) +
   theme_bw() +
@@ -295,9 +313,73 @@ perg2_p <- per_genome_dt |>
 perg2_p
 ```
 
+```{r}
+ggsave(
+  perg2_p,
+  file = here::here("charts/mock_comm_read_corr_esviritu_scatter1.pdf"),
+  width = 4,
+  height = 7
+)
+```
 
 
 
 # Assembly ANI Comparison
+```{r}
+asm_list <- list.files(path = here::here("data/mock_virome/esviritu_assembly_tables"), 
+                        pattern = "\\.assembly_summary.tsv$", 
+                        full.names = TRUE)
+
+# 2. Read all files into a list of data.tables and bind them together
+asm_dt <- rbindlist(lapply(asm_list, fread)) |>
+  separate_wider_regex(
+    cols = sample_ID,
+    patterns = c(sample_ID = ".*", "_", param_set = "[^_]+")
+  )
+```
+
+```{r}
+asm_merge_dt <- merge(
+  asm_dt,
+  ground_truth_dt,
+  by = c("Assembly", "sample_ID")
+)
+```
+
+```{r}
+ani_p <- asm_merge_dt |>
+  mutate(
+    ANIperc = paste0(ani_level, "%"),
+    ANIperc = fct_relevel(ANIperc, "100%", "98%", "95%", "90%", "85%", "80%")
+    ) |>
+  ggplot(aes(x = factor(ANIperc), y = consensus_ref_identity)) +
+  geom_boxplot(fill = "grey70") +
+  theme_bw() +
+  facet_wrap(~param_set) +
+  scale_y_continuous(labels = scales::percent) +
+  labs(
+    x = "True ANI % to Reference",
+    y = "EsViritu Esitimated ANI % to Reference"
+  )
+
+ani_p
+```
+
+
+```{r}
+#ani_p
+ggsave(
+  ani_p,
+  file = here::here("charts/mock_comm_assembly_ani_esv_box1.pdf"),
+  width = 7,
+  height = 4
+)
+```
+
+
+
+
+
+
 
 
