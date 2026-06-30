@@ -785,7 +785,8 @@ u <- read_tsv(unified_path, show_col_types = FALSE) |>
 
 # ---- Load ground truth (per community), build strict + capped versions --
 gt <- map_dfr(gt_files, ~ read_tsv(.x, show_col_types = FALSE) |>
-                mutate(sample = str_extract(basename(.x), "mock_comb\\d+"))) |>
+                #gsub("\\..*", "", filename)
+                mutate(sample = str_extract(basename(.x), "[a-z_]+\\d+"))) |>
   mutate(across(all_of(ranks), clean_label),
          rel = read_count / sum(read_count), .by = sample) |>
   left_join(ANI_RANK_CAP, by = "ani_level")
@@ -864,7 +865,7 @@ cap_bc_p <- metrics |>
                       labels = function(x) tool_labels[x]) +
   labs(x = "Taxonomic rank", y = ylab,
        title = paste0("Bray-Curtis dissimilarity: strict vs divergence-capped truth")) +
-  ylim(c(0, NA)) +
+  #ylim(c(0, NA)) +
   theme_bench() +
   theme(axis.text.x = element_text(angle = 60, hjust = 1))
 
@@ -897,7 +898,7 @@ cap_f1_p <- metrics |>
                       labels = function(x) tool_labels[x]) +
   labs(x = "Taxonomic rank", y = ylab,
        title = paste0("F1 Score: strict vs divergence-capped truth")) +
-  ylim(c(0, NA)) +
+  #ylim(c(0, NA)) +
   theme_bench() +
   theme(axis.text.x = element_text(angle = 60, hjust = 1))
 
