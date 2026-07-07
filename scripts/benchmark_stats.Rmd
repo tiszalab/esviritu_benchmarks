@@ -15,6 +15,7 @@ library(PMCMRplus)
 library(DescTools)
 library(here)
 library(brglm2)
+library(forcats)
 ```
 
 ```{r}
@@ -35,8 +36,8 @@ paths <- list(
 tool_levels  <- c("esviritu", "centrifuger", "kraken2", "metabuli", "sylph")
 tool_labels  <- c(esviritu = "EsViritu", centrifuger = "Centrifuger",
                   kraken2 = "Kraken2", metabuli = "Metabuli", sylph = "Sylph")
-tool_palette <- c(esviritu = "#56B4A0", centrifuger = "#F0A030",
-                  kraken2 = "#B0B0B0", metabuli = "#C0704F", sylph = "#4F79C0")
+tool_palette <- c(esviritu = "#90D4CC", centrifuger = "#FBA72A",
+                  kraken2 = "#D3D4D8", metabuli = "#CB7A5C", sylph = "#5785C1")
 
 # Headline parameter-set selection: pick the BEST parameter set per competitor
 # so comparisons are not vulnerable to a "you crippled the competitor" critique.
@@ -905,6 +906,41 @@ cap_f1_p <- metrics |>
 save_fig(cap_f1_p, "capped_vs_strict_mock_f1.pdf", w = 8, h = 5)
 
 cap_f1_p
+```
+
+```{r}
+u |>
+  group_by(tool, sample, param_set, family) |>
+  summarize(n = n()) |>
+  filter(tool == "kraken2", grepl("_fam", sample))
+```
+
+```{r}
+perfam_p <- u |>
+  filter(
+    grepl("_fam", sample),
+    !grepl("ptaxnone", param_set)
+    ) |>
+  group_by(tool, sample, param_set, family, base_tool) |>
+  summarize(n = n()) |>
+  ungroup() |>
+  mutate(tool = fct_relevel(tool, "esviritu", "centrifuger", "kraken2", "metabuli", "sylph")) |>
+  ggplot(aes(x = param_set, y = n, color = tolower(as.character(base_tool)))) +
+  geom_jitter(height = 0, width = 0.1, alpha = 0.5) +
+  geom_hline(yintercept = 1, linetype = "dashed", alpha = 0.5) +
+  scale_color_manual(values = tool_palette, name = "Tool",
+                      labels = function(x) tool_labels[x]) +
+  facet_grid(cols = vars(base_tool), scales = "free_x", space = "free") +
+  scale_y_log10() +
+  labs(x = "Parameters", 
+       y = "# Classifications per Family",
+       ) +
+  theme_bench() +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1))
+
+save_fig(perfam_p, "mock_detections_per_family.pdf", w = 8, h = 4)
+
+perfam_p
 ```
 
 
