@@ -34,11 +34,9 @@ color_lookup <- c(
 # Rank Metrics
 ```{r}
 rank_dt <- fread(
-  here::here("data/mock_virome/rank_metrics.tsv"),
-  sep = "\t",
-  header = T
+  here::here("stats/profile_vs_truth_metrics.csv")
 ) |>
-  filter(!grepl("ptaxnone", param_set))
+  filter(truth_mode == "strict", !grepl("ptaxnone", param_set))
 ```
 
 
@@ -50,7 +48,7 @@ spear_p <- rank_dt |>
     tool_mode = paste0(tool, " ", param_set),
     tool = fct_relevel(tool, "esviritu", "centrifuger", "kraken2", "metabuli", "sylph")
   ) |>
-  ggplot(aes(x = tool_mode, fill = tool, y = log10(FP))) +
+  ggplot(aes(x = tool_mode, fill = tool, y = log10(FP + 1))) +
   geom_col(color = "grey15", position = "dodge") +
   facet_grid(c(~rank, ~sample)) +
   scale_fill_manual(values = color_lookup) +
@@ -75,7 +73,7 @@ scat1_p <- rank_dt |>
     mock = gsub("mock_comb", "Community #", sample)
   ) |>
   filter(tool != "sylph") |>
-  ggplot(aes(x = bray_curtis_rpm, y = F1, color = tool, shape = mock)) +
+  ggplot(aes(x = bray_curtis, y = F1, color = tool, shape = mock)) +
   geom_point(size = 4, alpha = 0.85) +
   facet_grid(~rank) +
   scale_color_manual(values = color_lookup) +

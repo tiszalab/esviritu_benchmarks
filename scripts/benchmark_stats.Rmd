@@ -22,7 +22,6 @@ library(forcats)
 paths <- list(
   pos     = file.path(here::here("data/positive_control/positive_control_results.csv")),
   neg     = file.path(here::here("data/negative_control/negative_control_results.csv")),
-  rank    = file.path(here::here("data/mock_virome/rank_metrics.tsv")),
   genome  = file.path(here::here("data/mock_virome/per_genome_detection.tsv")),
   ani     = file.path(here::here("data/mock_virome/ani_aware_detection.tsv")),
   out_tab = file.path(here::here("stats")),
@@ -39,10 +38,8 @@ tool_labels  <- c(esviritu = "EsViritu", centrifuger = "Centrifuger",
 tool_palette <- c(esviritu = "#90D4CC", centrifuger = "#FBA72A",
                   kraken2 = "#D3D4D8", metabuli = "#CB7A5C", sylph = "#5785C1")
 
-# Headline parameter-set selection: pick the BEST parameter set per competitor
-# so comparisons are not vulnerable to a "you crippled the competitor" critique.
-# Set to "manual" and edit headline_params_manual to fix specific sets instead.
-HEADLINE_PARAM_MODE <- "best"   # "best" or "manual"
+# Headline parameter-set selection for all headline comparisons.
+HEADLINE_PARAM_MODE <- "manual"
 headline_params_manual <- c(
   esviritu    = "sense",
   centrifuger = "mhl100_ms0",
@@ -50,6 +47,9 @@ headline_params_manual <- c(
   metabuli    = "prec0_ms0_ptaxnone",
   sylph       = "mnk20"
 )
+
+# Negative-control parameter-set selection for paired specificity comparisons.
+NEGATIVE_CONTROL_PARAMS <- headline_params_manual
 ```
 
 
@@ -76,11 +76,15 @@ factor_tool <- function(x) {
 # Choose one parameter set per base tool for headline (paired) comparisons.
 # `score_col` is the column used to rank param sets when mode == "best"
 # (higher = better). Returns the input filtered to one param set per tool.
+param_table <- function(params) {
+  tibble(base_tool = unname(tool_labels[names(params)]),
+         param_set = unname(params))
+}
+
 pick_headline <- function(df, tool_col = "base_tool",
                           param_col = "param_set", score_col) {
   if (HEADLINE_PARAM_MODE == "manual") {
-    keep <- tibble(base_tool = names(headline_params_manual),
-                   param_set = unname(headline_params_manual))
+    keep <- param_table(headline_params_manual)
     df |>
       inner_join(keep, by = setNames(c("base_tool", "param_set"),
                                      c(tool_col, param_col)))
@@ -94,6 +98,12 @@ pick_headline <- function(df, tool_col = "base_tool",
       select(all_of(c(tool_col, param_col)))
     df |> inner_join(best, by = c(tool_col, param_col))
   }
+}
+
+pick_negative_control <- function(df) {
+  keep <- param_table(NEGATIVE_CONTROL_PARAMS)
+  df |>
+    inner_join(keep, by = c("base_tool", "param_set"))
 }
 
 # ---- Plotting -----------------------------------------------------------
@@ -257,19 +267,14 @@ False Postives in Neg Controls
 # number of false species, plus Kendall's W effect size.
 
 
-# The negative-control table holds the full parameter sweep (many settings per
-# tool) and both EsViritu modes. Collapse to ONE best-case value per
-# (sample, base_tool): the minimum false-positive load across that tool's
-# settings/modes. This (a) reports each tool at its best specificity and
-# (b) guarantees an unreplicated complete block design for Friedman.
 neg <- read_csv(paths$neg, show_col_types = FALSE) |>
   mutate(
-    base_tool = factor_tool(tool),
+    base_tool = as.character(factor_tool(tool)),
+    param_set = settings,
     neg_class = "true_negative"
     ) |>
-  group_by(neg_class, sample, base_tool) |>
-  summarise(fp_pct = min(fp_pct), n_species = min(n_species),
-            .groups = "drop")
+  pick_negative_control() |>
+  mutate(base_tool = factor(base_tool, levels = tool_labels[tool_levels]))
 
 sample_info <- tibble(
   sample = c("SRR32674837", "SRR38307491", "SRR38270014", "SRR38629931", "SRR38746368", "chm13v2_10M", "SRR31273449"),
@@ -488,27 +493,100 @@ sp_full_tile_p
 Mock Community Stats
 
 ```{r}
+unified_path <- file.path(here::here("data/mock_virome/unified_long.tsv"))
+gt_files <- list.files(file.path(here::here("data/mock_virome")),
+                       pattern = "ground_truth.tsv$", full.names = TRUE)
 
-rank_m <- read_csv(paths$rank, show_col_types = FALSE)  # tab-sep? -> handle both
-if (ncol(rank_m) == 1) rank_m <- read_tsv(paths$rank, show_col_types = FALSE)
+ranks <- c("family", "genus", "species", "subspecies")
 
-mock <- rank_m |>
-  mutate(base_tool = as.character(factor_tool(tool))) |>
-  pick_headline(score_col = "F1") |>
-  mutate(
-    base_tool = relevel(factor(base_tool, levels = tool_labels[tool_levels]),
-                        ref = tool_labels[["esviritu"]]),
-    rank = factor(rank, levels = c("family", "genus", "species")),
-    sample = factor(sample)
-  )
+# ANI (% identity to reference) -> deepest resolvable rank for capped mode.
+ANI_RANK_CAP <- tribble(
+  ~ani_level, ~cap_rank,
+  100,        "subspecies",
+  98,         "subspecies",
+  95,         "species",
+  90,         "species",
+  85,         "genus",
+  80,         "genus"
+)
+rank_order <- c(family = 1, genus = 2, species = 3, subspecies = 4)
 
-mock |> distinct(base_tool, param_set) |> arrange(base_tool) |> print()
+# ---- Helpers ------------------------------------------------------------
+# Treat NA / "" / bare prefix ("g__", "t__") / "*__unclassified*" placeholders
+# (e.g. EsViritu's "s__unclassified_<Genus>") as unclassified at that rank.
+clean_label <- function(x) {
+  x <- na_if(str_squish(replace_na(as.character(x), "")), "")
+  if_else(is.na(x) | str_detect(x, "_{2}\\s*$") | str_detect(x, "(?i)__unclassified"),
+          NA_character_, x)
+}
 
+# One profile (taxon, rel) per rank vs one truth (taxon, rel): all metrics.
+score_pair <- function(pred, truth) {
+  j <- full_join(pred, truth, by = "taxon",
+                 suffix = c("_p", "_t")) |>
+    mutate(rel_p = replace_na(rel_p, 0), rel_t = replace_na(rel_t, 0))
+  tp <- sum(j$rel_p > 0 & j$rel_t > 0)
+  fp <- sum(j$rel_p > 0 & j$rel_t == 0)
+  fn <- sum(j$rel_p == 0 & j$rel_t > 0)
+  prec <- if (tp + fp > 0) tp / (tp + fp) else NA_real_
+  rec  <- if (tp + fn > 0) tp / (tp + fn) else NA_real_
+  bc   <- if (sum(j$rel_p + j$rel_t) > 0)
+            sum(abs(j$rel_p - j$rel_t)) / sum(j$rel_p + j$rel_t) else NA_real_
+  pear <- if (sd(j$rel_p) > 0 && sd(j$rel_t) > 0) cor(j$rel_p, j$rel_t) else NA_real_
+  spear<- if (sd(j$rel_p) > 0 && sd(j$rel_t) > 0)
+            cor(j$rel_p, j$rel_t, method = "spearman") else NA_real_
+  tibble(n_pred = tp + fp, n_truth = tp + fn, TP = tp, FP = fp, FN = fn,
+         precision = prec, recall = rec,
+         F1 = if (!is.na(prec) && !is.na(rec) && prec + rec > 0)
+                2 * prec * rec / (prec + rec) else NA_real_,
+         bray_curtis = bc, pearson = pear, spearman = spear)
+}
+
+u <- read_tsv(unified_path, show_col_types = FALSE) |>
+  mutate(across(all_of(ranks), clean_label),
+         base_tool = factor_tool(tool)) |>
+  group_by(tool, param_set, sample) |>
+  mutate(rel = count / sum(count, na.rm = TRUE)) |>
+  ungroup()
+
+gt <- map_dfr(gt_files, ~ read_tsv(.x, show_col_types = FALSE) |>
+                mutate(sample = str_extract(basename(.x), "[a-z_]+\\d+"))) |>
+  mutate(across(all_of(ranks), clean_label),
+         rel = read_count / sum(read_count), .by = sample) |>
+  left_join(ANI_RANK_CAP, by = "ani_level")
+
+metrics <- map_dfr(ranks, function(rk) {
+  pred_rk <- u |>
+    mutate(taxon = .data[[rk]]) |>
+    filter(!is.na(taxon)) |>
+    summarise(rel = sum(rel),
+              .by = c(base_tool, tool, param_set, sample, taxon))
+  map_dfr(c("strict", "capped"), function(mode) {
+    truth_rk <- gt |>
+      { \(d) if (mode == "capped")
+               filter(d, rank_order[cap_rank] >= rank_order[[rk]]) else d }() |>
+      mutate(taxon = .data[[rk]]) |>
+      filter(!is.na(taxon)) |>
+      summarise(rel = sum(rel), .by = c(sample, taxon))
+
+    pred_rk |>
+      group_by(base_tool, tool, param_set, sample) |>
+      group_modify(~ score_pair(
+        select(.x, taxon, rel),
+        filter(truth_rk, sample == .y$sample) |> select(taxon, rel))) |>
+      ungroup() |>
+      mutate(rank = rk, truth_mode = mode)
+  })
+})
+
+metrics <- metrics |>
+  mutate(rank = factor(rank, levels = ranks),
+         base_tool = factor(base_tool, levels = tool_labels[tool_levels]))
+save_tab(metrics, "profile_vs_truth_metrics.csv")
+message("rows: ", nrow(metrics))
 ```
 
-
 ```{r}
-
 fit_metric <- function(df, metric) {
   f <- reformulate(c("base_tool * rank", "sample"), response = metric)
   m <- lm(f, data = df)
@@ -520,36 +598,6 @@ fit_metric <- function(df, metric) {
        contrasts = contr)
 }
 
-metrics <- c("F1", "bray_curtis_rel", "pearson")
-res <- map(set_names(metrics), ~ fit_metric(mock, .x))
-
-emm_all  <- map_dfr(res, "emmeans")
-con_all  <- map_dfr(res, "contrasts")
-save_tab(emm_all, "mock_lmm_emmeans.csv")
-save_tab(con_all, "mock_lmm_contrasts.csv")
-print(con_all, n = Inf)
-```
-
-
-```{r}
-
-# ---- Figure: marginal means with CIs by rank ---------------------------
-p <- emm_all |>
-  mutate(metric = recode(metric, bray_curtis_rel = "Bray-Curtis",
-                         pearson = "Pearson r")) |>
-  ggplot(aes(rank, emmean, colour = tolower(as.character(base_tool)),
-             group = base_tool)) +
-  geom_pointrange(aes(ymin = lower.CL, ymax = upper.CL),
-                  position = position_dodge(width = 0.5)) +
-  facet_wrap(~ metric, scales = "free_y") +
-  scale_colour_manual(values = tool_palette, name = "Tool",
-                      labels = function(x) tool_labels[x]) +
-  labs(x = "Taxonomic rank", y = "Estimated marginal mean (95% CI)",
-       title = "Mock communities: modelled accuracy by tool and rank") +
-  theme_bench()
-save_fig(p, "mock_lmm_emmeans.pdf", w = 9, h = 4.5)
-
-p
 ```
 
 Abundance Calibration
@@ -662,8 +710,9 @@ p_ccc
 
 Parameter Robustness
 ```{r}
-rank_m <- read_tsv(paths$rank, show_col_types = FALSE) |>
-  mutate(base_tool = as.character(factor_tool(tool)))
+rank_m <- metrics |>
+  filter(truth_mode == "strict", rank %in% c("family", "genus", "species")) |>
+  mutate(base_tool = as.character(base_tool))
 
 mock_rob <- rank_m |>
   group_by(base_tool, param_set, rank) |>
@@ -684,7 +733,8 @@ save_tab(mock_rob, "param_robustness_mock_F1.csv")
 
 
 ```{r}
-pos_rob <- pos |>
+pos_rob <- pos_raw |>
+  mutate(base_tool = as.character(base_tool)) |>
   group_by(base_tool, param_set) |>
   summarise(det_rate = mean(detected), .groups = "drop") |>
   group_by(base_tool) |>
@@ -716,121 +766,55 @@ p_f1 <- rank_m |>
        title = "Parameter robustness: spread of F1 per tool") +
   theme_bench() +
   theme(axis.text.x = element_text(angle = 30, hjust = 1))
-save_fig(p, "param_robustness_F1.pdf", w = 9, h = 4.5)
+save_fig(p_f1, "param_robustness_F1.pdf", w = 9, h = 4.5)
 
 p_f1
 ```
 
 Capping vs Strict Taxonomy for Divergent Genomes
 ```{r}
-unified_path <- file.path(here::here("data/mock_virome/unified_long.tsv"))
-gt_files <- list.files(file.path(here::here("data/mock_virome")),
-                       pattern = "ground_truth.tsv$", full.names = TRUE)
-```
-
-```{r}
-
-ranks <- c("family", "genus", "species", "subspecies")
-
-# ANI (% identity to reference) -> deepest resolvable rank for capped mode.
-ANI_RANK_CAP <- tribble(
-  ~ani_level, ~cap_rank,
-  100,        "subspecies",
-  98,         "subspecies",
-  95,         "species",
-  90,         "species",
-  85,         "genus",
-  80,         "genus"
-)
-rank_order <- c(family = 1, genus = 2, species = 3, subspecies = 4)
-
-# ---- Helpers ------------------------------------------------------------
-# Treat NA / "" / bare prefix ("g__", "t__") as unclassified at that rank.
-clean_label <- function(x) {
-  x <- na_if(str_squish(replace_na(as.character(x), "")), "")
-  if_else(is.na(x) | str_detect(x, "_{2}\\s*$"), NA_character_, x)
-}
-
-# One profile (taxon, rel) per rank vs one truth (taxon, rel): all metrics.
-score_pair <- function(pred, truth) {
-  j <- full_join(pred, truth, by = "taxon",
-                 suffix = c("_p", "_t")) |>
-    mutate(rel_p = replace_na(rel_p, 0), rel_t = replace_na(rel_t, 0))
-  tp <- sum(j$rel_p > 0 & j$rel_t > 0)
-  fp <- sum(j$rel_p > 0 & j$rel_t == 0)
-  fn <- sum(j$rel_p == 0 & j$rel_t > 0)
-  prec <- if (tp + fp > 0) tp / (tp + fp) else NA_real_
-  rec  <- if (tp + fn > 0) tp / (tp + fn) else NA_real_
-  bc   <- if (sum(j$rel_p + j$rel_t) > 0)
-            sum(abs(j$rel_p - j$rel_t)) / sum(j$rel_p + j$rel_t) else NA_real_
-  pear <- if (sd(j$rel_p) > 0 && sd(j$rel_t) > 0) cor(j$rel_p, j$rel_t) else NA_real_
-  spear<- if (sd(j$rel_p) > 0 && sd(j$rel_t) > 0)
-            cor(j$rel_p, j$rel_t, method = "spearman") else NA_real_
-  tibble(n_pred = tp + fp, n_truth = tp + fn, TP = tp, FP = fp, FN = fn,
-         precision = prec, recall = rec,
-         F1 = if (!is.na(prec) && !is.na(rec) && prec + rec > 0)
-                2 * prec * rec / (prec + rec) else NA_real_,
-         bray_curtis = bc, pearson = pear, spearman = spear)
-}
-```
-
-
-```{r}
-# ---- Load + normalise predicted profiles --------------------------------
-u <- read_tsv(unified_path, show_col_types = FALSE) |>
-  mutate(across(all_of(ranks), clean_label),
-         base_tool = factor_tool(tool)) |>
-  group_by(tool, param_set, sample) |>           # one unit per profile -> rel
-  mutate(rel = count / sum(count, na.rm = TRUE)) |>
-  ungroup()
-
-# ---- Load ground truth (per community), build strict + capped versions --
-gt <- map_dfr(gt_files, ~ read_tsv(.x, show_col_types = FALSE) |>
-                #gsub("\\..*", "", filename)
-                mutate(sample = str_extract(basename(.x), "[a-z_]+\\d+"))) |>
-  mutate(across(all_of(ranks), clean_label),
-         rel = read_count / sum(read_count), .by = sample) |>
-  left_join(ANI_RANK_CAP, by = "ani_level")
-
-# ---- Compute metrics per (tool, param_set, sample, rank, mode) ----------
-metrics <- map_dfr(ranks, function(rk) {
-  pred_rk <- u |>
-    mutate(taxon = .data[[rk]]) |>
-    filter(!is.na(taxon)) |>
-    summarise(rel = sum(rel),
-              .by = c(base_tool, tool, param_set, sample, taxon))
-  map_dfr(c("strict", "capped"), function(mode) {
-    truth_rk <- gt |>
-      { \(d) if (mode == "capped")
-               filter(d, rank_order[cap_rank] >= rank_order[[rk]]) else d }() |>
-      mutate(taxon = .data[[rk]]) |>
-      filter(!is.na(taxon)) |>
-      summarise(rel = sum(rel), .by = c(sample, taxon))
-
-    pred_rk |>
-      group_by(base_tool, tool, param_set, sample) |>
-      group_modify(~ score_pair(
-        select(.x, taxon, rel),
-        filter(truth_rk, sample == .y$sample) |> select(taxon, rel))) |>
-      ungroup() |>
-      mutate(rank = rk, truth_mode = mode)
-  })
-})
-
-metrics <- metrics |>
-  mutate(rank = factor(rank, levels = ranks),
-         base_tool = factor(base_tool, levels = tool_labels[tool_levels]))
-save_tab(metrics, "profile_vs_truth_metrics.csv")
-message("rows: ", nrow(metrics))
-```
-
-```{r}
-# ---- Headline summary: best param set per tool (by F1, strict) ----------
+# ---- Headline summary: declared param set per tool ----------------------
 headline <- metrics |>
-  filter(truth_mode == "strict") |>
-  summarise(mF1 = mean(F1, na.rm = TRUE), .by = c(base_tool, tool, param_set)) |>
-  slice_max(mF1, n = 1, by = base_tool, with_ties = FALSE) |>
-  select(base_tool, tool, param_set)
+  mutate(base_tool = as.character(base_tool)) |>
+  pick_headline(score_col = "F1") |>
+  distinct(base_tool, tool, param_set)
+
+mock <- metrics |>
+  filter(truth_mode == "strict", rank %in% c("family", "genus", "species")) |>
+  mutate(base_tool = as.character(base_tool)) |>
+  pick_headline(score_col = "F1") |>
+  mutate(
+    base_tool = relevel(factor(base_tool, levels = tool_labels[tool_levels]),
+                        ref = tool_labels[["esviritu"]]),
+    rank = factor(rank, levels = c("family", "genus", "species")),
+    sample = factor(sample)
+  )
+
+mock |> distinct(base_tool, param_set) |> arrange(base_tool) |> print()
+
+res <- map(set_names(c("F1", "bray_curtis", "pearson")), ~ fit_metric(mock, .x))
+emm_all  <- map_dfr(res, "emmeans")
+con_all  <- map_dfr(res, "contrasts")
+save_tab(emm_all, "mock_lmm_emmeans.csv")
+save_tab(con_all, "mock_lmm_contrasts.csv")
+print(con_all, n = Inf)
+
+p <- emm_all |>
+  mutate(metric = recode(metric, bray_curtis = "Bray-Curtis",
+                         pearson = "Pearson r")) |>
+  ggplot(aes(rank, emmean, colour = tolower(as.character(base_tool)),
+             group = base_tool)) +
+  geom_pointrange(aes(ymin = lower.CL, ymax = upper.CL),
+                  position = position_dodge(width = 0.5)) +
+  facet_wrap(~ metric, scales = "free_y") +
+  scale_colour_manual(values = tool_palette, name = "Tool",
+                      labels = function(x) tool_labels[x]) +
+  labs(x = "Taxonomic rank", y = "Estimated marginal mean (95% CI)",
+       title = "Mock communities: modelled accuracy by tool and rank") +
+  theme_bench()
+save_fig(p, "mock_lmm_emmeans.pdf", w = 9, h = 4.5)
+
+p
 
 summary_tbl <- metrics |>
   inner_join(headline, by = c("base_tool", "tool", "param_set")) |>
@@ -864,7 +848,7 @@ cap_bc_p <- metrics |>
   facet_wrap(c(~truth_mode, ~rank), nrow = 2) +
   scale_fill_manual(values = tool_palette, name = "Tool",
                       labels = function(x) tool_labels[x]) +
-  labs(x = "Taxonomic rank", y = ylab,
+  labs(x = "Taxonomic rank", y = "Bray-Curtis dissimilarity",
        title = paste0("Bray-Curtis dissimilarity: strict vs divergence-capped truth")) +
   #ylim(c(0, NA)) +
   theme_bench() +
@@ -897,7 +881,7 @@ cap_f1_p <- metrics |>
   facet_wrap(c(~truth_mode, ~rank), nrow = 2) +
   scale_fill_manual(values = tool_palette, name = "Tool",
                       labels = function(x) tool_labels[x]) +
-  labs(x = "Taxonomic rank", y = ylab,
+  labs(x = "Taxonomic rank", y = "F1 Score",
        title = paste0("F1 Score: strict vs divergence-capped truth")) +
   #ylim(c(0, NA)) +
   theme_bench() +
