@@ -16,6 +16,7 @@ library(DescTools)
 library(here)
 library(brglm2)
 library(forcats)
+library(ggpubr)
 ```
 
 ```{r}
@@ -168,6 +169,38 @@ print(summary(m))
 save_tab(tidy(m) |> mutate(across(where(is.numeric), ~ signif(.x, 4))),
          "pos_firth_coefficients.csv")
 ```
+
+```{r}
+# --- tile map of detection for positive control ----
+tilepos_p <- pos_raw |>
+  filter(!grepl("ptaxnone", param_set)) |>
+  mutate(acc_ani = paste0(accession, "\n(", bestANI, "% ANI)")) |>
+  group_by(base_tool, param_set, acc_ani, read_count, bestANI, family) |>
+  summarize(detect_frac = sum(detected) / 10) |>
+  ungroup() |>
+  mutate(acc_ani = fct_reorder(acc_ani, bestANI)) |>
+  ggplot(aes(x = factor(read_count), y = param_set, fill = detect_frac)) +
+  geom_tile(color = "grey30") +
+  scale_fill_gradient(
+    low = "white",
+    high = "#34273B",
+    name = "Detected Prop."
+  ) +
+  facet_grid(c(~base_tool, ~acc_ani), scales = "free", space = "free") +
+  labs(
+    x = "Read Pairs",
+    y = "Tool Parameter Set"
+  ) +
+  theme_bench() +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1))
+
+save_fig(tilepos_p, "pos_tile_map1.pdf", w = 11, h = 8.5)
+
+
+tilepos_p
+```
+
+
 
 ```{r}
 
@@ -780,13 +813,13 @@ headline <- metrics |>
   distinct(base_tool, tool, param_set)
 
 mock <- metrics |>
-  filter(truth_mode == "strict", rank %in% c("family", "genus", "species")) |>
+  filter(truth_mode == "strict", rank %in% c("family", "genus", "species", "subspecies")) |>
   mutate(base_tool = as.character(base_tool)) |>
   pick_headline(score_col = "F1") |>
   mutate(
     base_tool = relevel(factor(base_tool, levels = tool_labels[tool_levels]),
                         ref = tool_labels[["esviritu"]]),
-    rank = factor(rank, levels = c("family", "genus", "species")),
+    rank = factor(rank, levels = c("family", "genus", "species", "subspecies")),
     sample = factor(sample)
   )
 
@@ -830,6 +863,7 @@ print(summary_tbl, n = Inf)
 # plot
 cap_bc_p <- metrics |>
   inner_join(headline, by = c("base_tool", "tool", "param_set")) |>
+  mutate(base_tool = fct_relevel(base_tool, "EsViritu", "Centrifuger", "Kraken2", "Metabuli", "Sylph")) |>
   ggplot(aes(base_tool, 
              .data[["bray_curtis"]], 
              fill = tolower(as.character(base_tool))
@@ -848,13 +882,24 @@ cap_bc_p <- metrics |>
   facet_wrap(c(~truth_mode, ~rank), nrow = 2) +
   scale_fill_manual(values = tool_palette, name = "Tool",
                       labels = function(x) tool_labels[x]) +
+  stat_compare_means(
+    comparisons = list(
+      c("EsViritu", "Centrifuger"),
+      c("EsViritu", "Kraken2"),
+      c("EsViritu", "Metabuli"),
+      c("EsViritu", "Sylph")
+      ),
+    method = "wilcox.test", 
+    label = "p.signif",
+    vjust = 0.8
+  ) +
   labs(x = "Taxonomic rank", y = "Bray-Curtis dissimilarity",
        title = paste0("Bray-Curtis dissimilarity: strict vs divergence-capped truth")) +
-  #ylim(c(0, NA)) +
+  ylim(c(0, 1.5)) +
   theme_bench() +
   theme(axis.text.x = element_text(angle = 60, hjust = 1))
 
-save_fig(cap_bc_p, "capped_vs_strict_mock_bc.pdf", w = 8, h = 5)
+save_fig(cap_bc_p, "capped_vs_strict_mock_bc.pdf", w = 8, h = 6)
 
 cap_bc_p
 ```
@@ -863,6 +908,7 @@ cap_bc_p
 # plot
 cap_f1_p <- metrics |>
   inner_join(headline, by = c("base_tool", "tool", "param_set")) |>
+  mutate(base_tool = fct_relevel(base_tool, "EsViritu", "Centrifuger", "Kraken2", "Metabuli", "Sylph")) |>
   ggplot(aes(base_tool, 
              .data[["F1"]], 
              fill = tolower(as.character(base_tool))
@@ -881,13 +927,24 @@ cap_f1_p <- metrics |>
   facet_wrap(c(~truth_mode, ~rank), nrow = 2) +
   scale_fill_manual(values = tool_palette, name = "Tool",
                       labels = function(x) tool_labels[x]) +
+  stat_compare_means(
+    comparisons = list(
+      c("EsViritu", "Centrifuger"),
+      c("EsViritu", "Kraken2"),
+      c("EsViritu", "Metabuli"),
+      c("EsViritu", "Sylph")
+      ),
+    method = "wilcox.test", 
+    label = "p.signif",
+    vjust = 0.8
+  ) +
   labs(x = "Taxonomic rank", y = "F1 Score",
        title = paste0("F1 Score: strict vs divergence-capped truth")) +
-  #ylim(c(0, NA)) +
+  ylim(c(0, 1.5)) +
   theme_bench() +
   theme(axis.text.x = element_text(angle = 60, hjust = 1))
 
-save_fig(cap_f1_p, "capped_vs_strict_mock_f1.pdf", w = 8, h = 5)
+save_fig(cap_f1_p, "capped_vs_strict_mock_f1.pdf", w = 8, h = 6)
 
 cap_f1_p
 ```

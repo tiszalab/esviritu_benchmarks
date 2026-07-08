@@ -13,6 +13,7 @@ library(here)
 paths <- list(
   timing  = here::here("data/time_and_mem/timing.mock_and_neg.1.tsv"),
   reads   = here::here("data/time_and_mem/sr_esviritu_readtotals.tsv"),
+  scaling = here::here("data/time_and_mem/scaling_metrics.tsv"),
   out_fig = here::here("charts"),
   out_tab = here::here("stats")
 )
@@ -259,9 +260,75 @@ save_fig(p_param_mem, "timing_memory_by_param.pdf", w = 10, h = 5)
 p_param_mem
 ```
 
+```{r}
+# scaling analysis. increasing reads, increasing CPUs
+scale_dt <- read_tsv(paths$scaling, show_col_types = FALSE) |>
+  filter(!tool %in% c("centrifuger", "sylph") | step == "total") #remove intermediate step data
+```
+
+```{r}
+scale1_p <- scale_dt |>
+  ggplot(aes(x = read_count, y = real_s, colour = tolower(as.character(tool)))) +
+  geom_line() +
+  geom_point() +
+  scale_x_log10() +
+  scale_y_log10() +
+  scale_colour_manual(values = tool_palette, guide = "none") +
+  facet_wrap(~cpus, nrow = 1) +
+  theme_bench() 
+#save_fig(p_param_mem, "timing_memory_by_param.pdf", w = 10, h = 5)
+
+scale1_p
+```
+
+```{r}
+scale2_p <- scale_dt |>
+  mutate(read_str = paste0(read_count, " read pairs")) |>
+  mutate(read_str = fct_relevel(read_str, 
+                                "1e+06 read pairs", "1e+07 read pairs", 
+                                "5e+07 read pairs", "1e+08 read pairs", 
+                                "2e+08 read pairs")
+         ) |>
+  ggplot(aes(x = cpus, y = real_s, colour = tool)) +
+  geom_line() +
+  geom_point() +
+  scale_y_log10() +
+  scale_colour_manual(values = tool_palette) +
+  labs(
+    x = "CPUs",
+    y = "Wall Time (seconds)"
+  ) +
+  facet_wrap(~read_str, nrow = 1) +
+  theme_bench() 
+save_fig(scale2_p, "scaling_timing_line1.pdf", w = 8, h = 4)
+
+scale2_p
+```
 
 
+```{r}
+mem1_p <- scale_dt |>
+  mutate(read_str = paste0(read_count, " read pairs")) |>
+  mutate(read_str = fct_relevel(read_str, 
+                                "1e+06 read pairs", "1e+07 read pairs", 
+                                "5e+07 read pairs", "1e+08 read pairs", 
+                                "2e+08 read pairs")
+         ) |>
+  ggplot(aes(x = cpus, y = max_rss_mb, colour = tool)) +
+  geom_line() +
+  geom_point() +
+  scale_y_log10() +
+  scale_colour_manual(values = tool_palette) +
+  labs(
+    x = "CPUs",
+    y = "Max. RAM Usage (MB)"
+  ) +
+  facet_wrap(~read_str, nrow = 1) +
+  theme_bench() 
+save_fig(mem1_p, "scaling_mem_line1.pdf", w = 8, h = 4)
 
+mem1_p
+```
 
 
 
