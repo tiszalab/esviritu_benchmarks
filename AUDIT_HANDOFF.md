@@ -22,6 +22,15 @@ This is an audit, not a mandate to accept every proposed remedy unchanged. Disti
 - No analysis code was changed during the audit.
 - The local review could inspect code and committed outputs but could not rerun the analysis because the complete execution environment and raw benchmark outputs are on the HPC.
 
+## HPC Locations
+repo: `/data/tisza/analyses/mjt_projects/esviritu_benchmarks/esviritu_benchmark_rplots`
+main tool outputs: 
+  - `/data/tisza/analyses/mjt_projects/esviritu_benchmarks/benchmarks_mock/results`
+  - `/data/tisza/analyses/mjt_projects/esviritu_benchmarks/benchmarks_negative1/results`
+  - `/data/tisza/analyses/mjt_projects/esviritu_benchmarks/benchmarks_positive1/results`
+
+Note: ignore scripts outside of the repo.
+
 ## Recommended workflow
 
 1. Inventory the HPC data and raw output files used by each notebook/script.
