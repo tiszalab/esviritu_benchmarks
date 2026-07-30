@@ -42,11 +42,11 @@ tool_palette <- c(esviritu = "#90D4CC", centrifuger = "#FBA72A",
 # Headline parameter-set selection for all headline comparisons.
 HEADLINE_PARAM_MODE <- "manual"
 headline_params_manual <- c(
-  esviritu    = "sense",
+  esviritu    = "sr",
   centrifuger = "mhl100_ms0",
-  kraken2     = "conf0_mhg2",
-  metabuli    = "prec0_ms0_ptaxnone",
-  sylph       = "mnk20"
+  kraken2     = "conf0.5_mhg2",
+  metabuli    = "prec1_ms0.15_ptax10239",
+  sylph       = "mnk10"
 )
 
 # Negative-control parameter-set selection for paired specificity comparisons.
@@ -289,6 +289,45 @@ p_ld50 <- ld50 |>
 save_fig(p_ld50, "pos_ld50_vs_ani.pdf", w = 7, h = 4.5)
 
 p_ld50
+```
+
+```{r}
+
+# ---- LD50 for every parameter set per tool, vs ANI ---------------------
+# As above, but keep all parameter sets (not just the headline one). One
+# logistic fit per (genome, tool, param set); faceted by base tool with a
+# line per parameter set.
+ld50_all <- pos_raw |>
+  mutate(base_tool = factor_tool(base_tool)) |>
+  group_by(accession, ANI, base_tool, param_set) |>
+  group_modify(~{
+    fit <- glm(detected ~ lr_c, data = .x,
+               family = binomial, method = brglmFit)
+    prob <- predict(fit, newdata = depth_grid, type = "response")
+    tibble(ld50_reads = 10^(cross_50(depth_grid$lr_c, prob) + READS_REF))
+  }) |>
+  ungroup()
+save_tab(ld50_all, "pos_ld50_per_genome_all_params.csv")
+
+p_ld50_all <- ld50_all |>
+  ggplot(aes(ANI, ld50_reads, colour = base_tool, group = param_set)) +
+  geom_line(linewidth = 0.6, alpha = 0.9) +
+  geom_point(size = 1.5) +
+  # NA LD50 = never reached 50% detection at any depth: mark at the ceiling
+  geom_point(data = ld50_all |> filter(is.na(ld50_reads)) |> mutate(ld50_reads = 2000),
+             shape = 4, size = 2) +
+  facet_wrap(~ base_tool) +
+  scale_y_log10() +
+  scale_colour_manual(values = unname(tool_palette[tool_levels]), name = "Tool") +
+  labs(x = "Genome ANI to reference (%)",
+       y = "LD50: read pairs for 50% detection (log)",
+       colour = "Parameter set",
+       title = "Limit of detection vs divergence, all parameter sets",
+       caption = "x = never reached 50% detection at any tested depth") +
+  theme_bench()
+save_fig(p_ld50_all, "pos_ld50_vs_ani_all_params.pdf", w = 10, h = 7)
+
+p_ld50_all
 ```
 
 
@@ -948,6 +987,52 @@ save_fig(cap_f1_p, "capped_vs_strict_mock_f1.pdf", w = 8, h = 6)
 
 cap_f1_p
 ```
+
+```{r}
+# plot
+cap_pear_p <- metrics |>
+  inner_join(headline, by = c("base_tool", "tool", "param_set")) |>
+  mutate(base_tool = fct_relevel(base_tool, "EsViritu", "Centrifuger", "Kraken2", "Metabuli", "Sylph")) |>
+  ggplot(aes(base_tool, 
+             .data[["pearson"]], 
+             fill = tolower(as.character(base_tool))
+             )
+         ) +
+  geom_point(
+    position = position_jitterdodge(
+      jitter.width = 0.1,
+      dodge.width = 0.6
+    ),
+    size = 3, 
+    alpha = 0.8,
+    shape = 21,
+    color = "grey10"
+    ) +
+  facet_wrap(c(~truth_mode, ~rank), nrow = 2) +
+  scale_fill_manual(values = tool_palette, name = "Tool",
+                      labels = function(x) tool_labels[x]) +
+  stat_compare_means(
+    comparisons = list(
+      c("EsViritu", "Centrifuger"),
+      c("EsViritu", "Kraken2"),
+      c("EsViritu", "Metabuli"),
+      c("EsViritu", "Sylph")
+      ),
+    method = "wilcox.test", 
+    label = "p.signif",
+    vjust = 0.8
+  ) +
+  labs(x = "Taxonomic rank", y = "F1 Score",
+       title = paste0("Pearson Correlation: strict vs divergence-capped truth")) +
+  ylim(c(-0.15, 1.5)) +
+  theme_bench() +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1))
+
+save_fig(cap_pear_p, "capped_vs_strict_mock_pearson.pdf", w = 8, h = 6)
+
+cap_pear_p
+```
+
 
 ```{r}
 u |>
