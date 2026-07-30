@@ -1,0 +1,4 @@
+metric,n,n_samples,sample_random_intercept_sd,singular
+F1,120,6,0.030914501506175012,FALSE
+bray_curtis,96,6,0.05662301558029498,FALSE
+pearson,96,6,0.10872617595070552,FALSE

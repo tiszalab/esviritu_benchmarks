@@ -1,11 +1,7 @@
 .y.,group1,group2,n1,n2,statistic,p,p.adj,p.adj.signif
 fp_pct,EsViritu,Centrifuger,7,7,1,1,1,ns
-fp_pct,EsViritu,Kraken2,7,7,0,0.1,0.143,ns
-fp_pct,EsViritu,Metabuli,7,7,0,0.016,0.039,*
-fp_pct,EsViritu,Sylph,7,7,1,1,1,ns
-fp_pct,Centrifuger,Kraken2,7,7,0,0.1,0.143,ns
-fp_pct,Centrifuger,Metabuli,7,7,0,0.016,0.039,*
-fp_pct,Centrifuger,Sylph,7,7,1,1,1,ns
-fp_pct,Kraken2,Metabuli,7,7,0,0.016,0.039,*
-fp_pct,Kraken2,Sylph,7,7,10,0.1,0.143,ns
-fp_pct,Metabuli,Sylph,7,7,28,0.016,0.039,*
+fp_pct,EsViritu,Kraken2,7,7,0,0.1,0.12,ns
+fp_pct,EsViritu,Metabuli,7,7,0,0.016,0.031,*
+fp_pct,Centrifuger,Kraken2,7,7,0,0.1,0.12,ns
+fp_pct,Centrifuger,Metabuli,7,7,0,0.016,0.031,*
+fp_pct,Kraken2,Metabuli,7,7,0,0.016,0.031,*

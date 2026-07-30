@@ -5,12 +5,16 @@ Metrics: false-positive reads classified, number of species called, families cal
 """
 
 import re
+import sys
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import polars as pl
 from plotnine import *
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from control_read_units import negative_count_to_individual_reads
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 BASE_DIR = Path("/data/tisza/analyses/mjt_projects/esviritu_benchmarks/benchmarks_negative1")
@@ -321,12 +325,18 @@ def main():
         all_rows.extend(r)
         print(f"  {name}: {len(r)} entries")
 
-    combined = pl.DataFrame(all_rows)
-    combined = combined.with_columns(
-        (pl.col("fp_reads") / pl.col("total_reads") * 100).alias("fp_pct"),
-    )
+    combined = pl.DataFrame(all_rows).rename({"fp_reads": "fp_reads_native"})
     combined = combined.join(
         SRR_INFO.rename({"accession": "sample"}), on="sample", how="left"
+    ).with_columns(
+        pl.struct("tool", "fp_reads_native", "read_type").map_elements(
+            lambda x: negative_count_to_individual_reads(
+                x["tool"], x["fp_reads_native"], x["read_type"]
+            ),
+            return_dtype=pl.Float64,
+        ).alias("fp_reads"),
+    ).with_columns(
+        (pl.col("fp_reads") / pl.col("total_reads") * 100).alias("fp_pct"),
     )
 
     combined.write_csv(BASE_DIR / "negative_control_results.csv")
