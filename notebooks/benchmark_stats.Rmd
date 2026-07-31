@@ -41,6 +41,9 @@ tool_palette <- c(esviritu = "#90D4CC", centrifuger = "#FBA72A",
 
 # Headline parameter-set selection for all headline comparisons.
 HEADLINE_PARAM_MODE <- "manual"
+
+# these are based on inspection of postive and negative control results.
+# We want the parameters with low false positive rate and then maximize true positive rate
 headline_params_manual <- c(
   esviritu    = "sr",
   centrifuger = "mhl100_ms0",
@@ -72,6 +75,26 @@ factor_tool <- function(x) {
   x <- tolower(str_extract(x, regex(paste(tool_levels, collapse = "|"),
                                     ignore_case = TRUE)))
   factor(x, levels = tool_levels, labels = tool_labels[tool_levels])
+}
+
+normalize_negative_read_units <- function(df) {
+  if ("fp_reads_native" %in% names(df)) {
+    df |>
+      mutate(fp_reads = as.numeric(fp_reads),
+             fp_pct = fp_reads / total_reads * 100)
+  } else {
+    df |>
+      mutate(
+        fp_reads_native = fp_reads,
+        fp_reads = case_when(
+          str_detect(tool, regex("sylph", ignore_case = TRUE)) ~ NA_real_,
+          !str_detect(tool, regex("esviritu", ignore_case = TRUE)) &
+            read_type == "illumina_short" ~ fp_reads_native * 2,
+          TRUE ~ as.numeric(fp_reads_native)
+        ),
+        fp_pct = fp_reads / total_reads * 100
+      )
+  }
 }
 
 # Choose one parameter set per base tool for headline (paired) comparisons.
@@ -128,11 +151,10 @@ save_tab <- function(df, name) {
 ```
 
 ```{r}
-# 01_positive_control_glmm.R ---------------------------------------------
-# Mixed-effects logistic regression of detection in the positive control,
-# with genome (accession) as a random effect to avoid pseudoreplication
-# across permutations. Produces tool contrasts and a limit-of-detection
-# (LD50) per tool.
+# 01_positive_control_bias_reduced_logistic.R ----------------------------
+# Bias-reduced logistic regression of detection in the positive control,
+# with genome (accession) as a fixed blocking factor across permutations.
+# Produces tool contrasts and a limit-of-detection (LD50) per tool.
 READS_REF <- 2   # log10(read pairs) centring reference => 100 read pairs
 
 pos_raw <- read_csv(paths$pos, show_col_types = FALSE)
@@ -161,12 +183,15 @@ pos |> distinct(base_tool, param_set) |> arrange(base_tool) |> print()
 
 ```{r}
 
-# ---- Primary model: Firth logistic, tool x depth, genome blocked --------
+# ---- Primary model: bias-reduced logistic, fixed genome block -----------
 m <- glm(detected ~ base_tool * lr_c + accession,
-         data = pos, family = binomial, method = brglmFit)
+         data = pos, family = binomial, method = brglmFit,
+         type = "AS_mixed")
 stopifnot(m$converged, m$rank == length(coef(m)))   # full rank, converged
 print(summary(m))
-save_tab(tidy(m) |> mutate(across(where(is.numeric), ~ signif(.x, 4))),
+save_tab(tidy(m) |>
+           mutate(estimator = "brglm2 AS_mixed", genome_effect = "fixed block") |>
+           mutate(across(where(is.numeric), ~ signif(.x, 4))),
          "pos_firth_coefficients.csv")
 ```
 
@@ -205,12 +230,20 @@ tilepos_p
 ```{r}
 
 # ---- Pairwise tool contrasts (EsViritu vs each), BH-corrected -----------
-# Averaged over genomes (nuisance) at representative depths.
-emm <- emmeans(m, ~ base_tool, at = list(lr_c = log10(c(10, 100)) - READS_REF),
+# Averaged over fixed genome blocks and reported separately at each depth.
+emm <- emmeans(m, ~ base_tool | lr_c,
+               at = list(lr_c = log10(c(10, 100)) - READS_REF),
                nuisance = "accession", type = "response")
-contr <- contrast(emm, "trt.vs.ctrl", ref = 1, adjust = "BH") |> as_tibble()
+emm_tbl <- as_tibble(emm) |>
+  mutate(read_pairs = 10^(lr_c + READS_REF),
+         estimator = "brglm2 AS_mixed", genome_effect = "fixed block")
+contr <- contrast(emm, "trt.vs.ctrl", ref = 1, adjust = "none") |>
+  as_tibble() |>
+  mutate(read_pairs = 10^(as.numeric(as.character(lr_c)) + READS_REF),
+         p.value = p.adjust(p.value, method = "BH"),
+         p_adjustment = "BH across both depths")
 print(contr)
-save_tab(as_tibble(emm), "pos_firth_emmeans.csv")
+save_tab(emm_tbl, "pos_firth_emmeans.csv")
 save_tab(contr, "pos_firth_tool_contrasts.csv")
 
 ```
@@ -238,34 +271,101 @@ p_curve <- curve |>
   theme_bench()
 save_fig(p_curve, "pos_detection_curves.pdf", w = 7, h = 4.5)
 
+p_curve
 ```
 
 ```{r}
 
 # ---- LD50 per tool per genome, vs ANI (divergence story) ----------------
-cross_50 <- function(x, p) {              # interpolate x where p crosses 0.5
-  if (all(p < 0.5)) return(NA_real_)
-  if (all(p >= 0.5)) return(min(x))
-  i <- which(p >= 0.5)[1]
-  if (i == 1) return(x[1])
-  x[i - 1] + (0.5 - p[i - 1]) * (x[i] - x[i - 1]) / (p[i] - p[i - 1])
+ld50_from_fit <- function(fit, newdata, min_reads = 1, max_reads = 1000) {
+  beta <- coef(fit)
+  covariance <- vcov(fit)
+  terms_no_response <- delete.response(terms(fit))
+  at_zero <- newdata |> mutate(lr_c = 0)
+  at_one <- newdata |> mutate(lr_c = 1)
+  at_min <- newdata |> mutate(lr_c = log10(min_reads) - READS_REF)
+  at_max <- newdata |> mutate(lr_c = log10(max_reads) - READS_REF)
+  x_zero <- model.matrix(terms_no_response, at_zero,
+                         contrasts.arg = fit$contrasts, xlev = fit$xlevels)
+  x_one <- model.matrix(terms_no_response, at_one,
+                        contrasts.arg = fit$contrasts, xlev = fit$xlevels)
+  x_min <- model.matrix(terms_no_response, at_min,
+                        contrasts.arg = fit$contrasts, xlev = fit$xlevels)
+  x_max <- model.matrix(terms_no_response, at_max,
+                        contrasts.arg = fit$contrasts, xlev = fit$xlevels)
+
+  map_dfr(seq_len(nrow(newdata)), function(i) {
+    intercept_design <- x_zero[i, ]
+    slope_design <- x_one[i, ] - x_zero[i, ]
+    intercept <- sum(intercept_design * beta)
+    slope <- sum(slope_design * beta)
+    estimate <- if (is.finite(slope) && slope > 0) -intercept / slope else NA_real_
+    gradient <- if (is.finite(estimate))
+      -intercept_design / slope + intercept * slope_design / slope^2 else rep(NA_real_, length(beta))
+    se <- if (all(is.finite(gradient)))
+      sqrt(max(0, as.numeric(t(gradient) %*% covariance %*% gradient))) else NA_real_
+    ld50_reads <- 10^(estimate + READS_REF)
+    ld50_lo <- 10^(estimate - qnorm(0.975) * se + READS_REF)
+    ld50_hi <- 10^(estimate + qnorm(0.975) * se + READS_REF)
+    prob_min <- plogis(sum(x_min[i, ] * beta))
+    prob_max <- plogis(sum(x_max[i, ] * beta))
+    censoring <- case_when(
+      !isTRUE(fit$converged) ~ "fit_failed",
+      prob_min >= 0.5 && prob_max >= 0.5 ~ "left_censored",
+      prob_min < 0.5 && prob_max < 0.5 ~ "right_censored",
+      !is.finite(estimate) ~ "non_increasing",
+      ld50_reads < min_reads ~ "left_censored",
+      ld50_reads > max_reads ~ "right_censored",
+      TRUE ~ "estimable"
+    )
+    bind_cols(
+      newdata[i, setdiff(names(newdata), "lr_c"), drop = FALSE],
+      tibble(
+        ld50_reads = ld50_reads,
+        ld50_lo = ld50_lo,
+        ld50_hi = ld50_hi,
+        censoring = censoring,
+        prob_at_min_reads = prob_min,
+        prob_at_max_reads = prob_max,
+        slope_logit = slope,
+        se_log10_ld50 = se,
+        ci_method = "delta method on log10 LD50",
+        tested_min_read_pairs = min_reads,
+        tested_max_read_pairs = max_reads,
+        converged = isTRUE(fit$converged),
+        full_rank = fit$rank == length(beta)
+      )
+    )
+  })
 }
 
-depth_grid <- tibble(lr_c = seq(0, 3, 0.01) - READS_REF)
+prepare_ld50_plot <- function(df) {
+  df |>
+    mutate(
+      ld50_plot = case_when(
+        censoring == "left_censored" ~ 1,
+        censoring == "right_censored" ~ 1000,
+        TRUE ~ ld50_reads
+      ),
+      ld50_lo_plot = pmax(1, ld50_lo),
+      ld50_hi_plot = pmin(1000, ld50_hi)
+    )
+}
 
 ld50 <- pos |>
   group_by(accession, ANI) |>
   group_modify(~{
     fit <- glm(detected ~ base_tool * lr_c, data = .x,
-               family = binomial, method = brglmFit)
-    expand_grid(base_tool = levels(.x$base_tool), depth_grid) |>
-      mutate(base_tool = factor(base_tool, levels = levels(.x$base_tool)),
-             prob = predict(fit, newdata = pick(everything()), type = "response")) |>
-      arrange(base_tool, lr_c) |>
-      group_by(base_tool) |>
-      summarise(ld50_reads = 10^(cross_50(lr_c, prob) + READS_REF), .groups = "drop")
+               family = binomial, method = brglmFit,
+               type = "AS_mixed")
+    newdata <- tibble(
+      base_tool = factor(levels(.x$base_tool), levels = levels(.x$base_tool)),
+      lr_c = 0
+    )
+    ld50_from_fit(fit, newdata)
   }) |>
-  ungroup()
+  ungroup() |>
+  prepare_ld50_plot()
 save_tab(ld50, "pos_ld50_per_genome.csv")
 print(ld50 |> arrange(base_tool, ANI), n = Inf)
 ```
@@ -273,18 +373,26 @@ print(ld50 |> arrange(base_tool, ANI), n = Inf)
 ```{r}
 
 p_ld50 <- ld50 |>
-  ggplot(aes(ANI, ld50_reads, colour = base_tool, group = base_tool)) +
-  geom_line(linewidth = 0.8) +
-  geom_point(size = 2) +
-  # NA LD50 = never reached 50% detection at any depth: mark at the ceiling
-  geom_point(data = ld50 |> filter(is.na(ld50_reads)) |> mutate(ld50_reads = 2000),
-             shape = 4, size = 2.5) +
-  scale_y_log10() +
+  ggplot(aes(ANI, ld50_plot, colour = base_tool, group = base_tool)) +
+  geom_line(
+    #data = ~ filter(.x, censoring == "estimable"), 
+    linewidth = 0.8
+    ) +
+  geom_linerange(
+    data = ~ filter(.x, censoring == "estimable"),
+    aes(ymin = ld50_lo_plot, ymax = ld50_hi_plot), 
+    linewidth = 0.5
+    ) +
+  geom_point(aes(shape = censoring), size = 4) +
+  scale_y_log10(limits = c(1, 1000)) +
+  scale_shape_manual(values = c(estimable = 16, left_censored = 25,
+                                right_censored = 24, non_increasing = 4,
+                                fit_failed = 4), name = "LD50 status") +
   scale_colour_manual(values = unname(tool_palette[tool_levels]), name = "Tool") +
   labs(x = "Genome ANI to reference (%)",
        y = "LD50: read pairs for 50% detection (log)",
        title = "Limit of detection vs divergence",
-       caption = "x = never reached 50% detection at any tested depth") +
+       caption = "Bars are delta-method 95% CIs; triangles mark censoring at 1 or 1,000 tested read pairs") +
   theme_bench()
 save_fig(p_ld50, "pos_ld50_vs_ani.pdf", w = 7, h = 4.5)
 
@@ -302,28 +410,37 @@ ld50_all <- pos_raw |>
   group_by(accession, ANI, base_tool, param_set) |>
   group_modify(~{
     fit <- glm(detected ~ lr_c, data = .x,
-               family = binomial, method = brglmFit)
-    prob <- predict(fit, newdata = depth_grid, type = "response")
-    tibble(ld50_reads = 10^(cross_50(depth_grid$lr_c, prob) + READS_REF))
+               family = binomial, method = brglmFit,
+               type = "AS_mixed")
+    ld50_from_fit(fit, tibble(lr_c = 0))
   }) |>
-  ungroup()
+  ungroup() |>
+  prepare_ld50_plot()
 save_tab(ld50_all, "pos_ld50_per_genome_all_params.csv")
 
 p_ld50_all <- ld50_all |>
-  ggplot(aes(ANI, ld50_reads, colour = base_tool, group = param_set)) +
-  geom_line(linewidth = 0.6, alpha = 0.9) +
-  geom_point(size = 1.5) +
-  # NA LD50 = never reached 50% detection at any depth: mark at the ceiling
-  geom_point(data = ld50_all |> filter(is.na(ld50_reads)) |> mutate(ld50_reads = 2000),
-             shape = 4, size = 2) +
+  ggplot(aes(ANI, ld50_plot, colour = base_tool, group = param_set)) +
+  geom_line(
+    #data = ~ filter(.x, censoring == "estimable"), 
+    linewidth = 0.6, 
+    alpha = 0.9
+    ) +
+  geom_linerange(
+    data = ~ filter(.x, censoring == "estimable"),
+    aes(ymin = ld50_lo_plot, ymax = ld50_hi_plot), alpha = 0.35
+    ) +
+  geom_point(aes(shape = censoring), size = 3) +
   facet_wrap(~ base_tool) +
-  scale_y_log10() +
+  scale_y_log10(limits = c(1, 1000)) +
+  scale_shape_manual(values = c(estimable = 16, left_censored = 25,
+                                right_censored = 24, non_increasing = 4,
+                                fit_failed = 4), name = "LD50 status") +
   scale_colour_manual(values = unname(tool_palette[tool_levels]), name = "Tool") +
   labs(x = "Genome ANI to reference (%)",
        y = "LD50: read pairs for 50% detection (log)",
        colour = "Parameter set",
        title = "Limit of detection vs divergence, all parameter sets",
-       caption = "x = never reached 50% detection at any tested depth") +
+       caption = "Bars are delta-method 95% CIs; triangles mark censoring at 1 or 1,000 tested read pairs") +
   theme_bench()
 save_fig(p_ld50_all, "pos_ld50_vs_ani_all_params.pdf", w = 10, h = 7)
 
@@ -340,6 +457,7 @@ False Postives in Neg Controls
 
 
 neg <- read_csv(paths$neg, show_col_types = FALSE) |>
+  normalize_negative_read_units() |>
   mutate(
     base_tool = as.character(factor_tool(tool)),
     param_set = settings,
@@ -365,6 +483,7 @@ neg <- merge(
 run_friedman_block <- function(df, value, label) {
   value <- as.character(ensym(value))      # column name as a string
   # complete blocks only
+  df <- df |> filter(!is.na(.data[[value]])) |> droplevels()
   ok <- df |> count(sample, base_tool) |> count(sample) |>
     filter(n == n_distinct(df$base_tool)) |> pull(sample)
   df <- df |> filter(sample %in% ok)
@@ -417,7 +536,7 @@ p <- neg |>
   scale_y_log10() +
   scale_colour_manual(values = tool_palette, guide = "none") +
   labs(x = NULL, y = "False-positive reads (%, log scale)",
-       title = "Negative-control specificity by tool") +
+       title = "Negative-control specificity by tool, headline params") +
   theme_bench() +
   theme(axis.text.x = element_text(angle = 30, hjust = 1))
 save_fig(p, "neg_control_fp.pdf", w = 8, h = 4.5)
@@ -433,7 +552,7 @@ sp_p <- neg |>
   geom_jitter(width = 0.15, height = 0, size = 2, alpha = 0.8) +
   scale_colour_manual(values = tool_palette, guide = "none") +
   labs(x = NULL, y = "False-positive species count",
-       title = "Negative-control specificity by tool") +
+       title = "Negative-control specificity by tool, headline params") +
   theme_bench() +
   theme(axis.text.x = element_text(angle = 30, hjust = 1))
 save_fig(sp_p, "neg_control_spp.pdf", w = 8, h = 4.5)
@@ -443,6 +562,7 @@ sp_p
 
 ```{r}
 neg_full <- read_csv(paths$neg, show_col_types = FALSE) |>
+  normalize_negative_read_units() |>
   mutate(
     base_tool = factor_tool(tool),
     neg_class = "true_negative"
@@ -452,7 +572,12 @@ neg_full <- merge(
   neg_full,
   sample_info,
   by = "sample"
-)
+) |>
+  # NAs are 0
+  mutate(
+    fp_reads = replace_na(fp_reads, 0),
+    fp_pct = replace_na(fp_pct, 0)
+  )
 
 ```
 
@@ -515,11 +640,11 @@ reads_full_tile_p <- neg_full |>
   scale_fill_gradient2(
     low = "white",
     mid = "orange",
-    high = "purple",
+    high = "#C35BCA",
     na.value = "white",
     limits = c(1e-4, NA)
   ) +
-  geom_text(aes(label = fp_reads)) +
+  geom_text(aes(label = scales::comma(fp_reads) )) +
   facet_grid(c(vars(neg_class),vars(base_tool)), scales = "free_y", space = "free") +
   labs(x = NULL, y = "log10(False-positive assigned reads)",
        title = "Negative-control specificity by tool") +
@@ -544,7 +669,7 @@ sp_full_tile_p <- neg_full |>
   scale_fill_gradient2(
     low = "white",
     mid = "orange",
-    high = "purple",
+    high = "#C35BCA",
     na.value = "white",
     limits = c(1e-4, NA)
   ) +
@@ -565,109 +690,37 @@ sp_full_tile_p
 Mock Community Stats
 
 ```{r}
-unified_path <- file.path(here::here("data/mock_virome/unified_long.tsv"))
-gt_files <- list.files(file.path(here::here("data/mock_virome")),
-                       pattern = "ground_truth.tsv$", full.names = TRUE)
+metrics <- read_tsv(here::here("data/mock_virome/rank_metrics.tsv"),
+                    show_col_types = FALSE) |>
+  mutate(
+    base_tool = factor_tool(tool),
+    bray_curtis = bray_curtis_rpm,
+    rank = factor(rank, levels = c("family", "genus", "species", "subspecies", "ani_capped")),
+    base_tool = factor(base_tool, levels = tool_labels[tool_levels])
+  )
 
-ranks <- c("family", "genus", "species", "subspecies")
-
-# ANI (% identity to reference) -> deepest resolvable rank for capped mode.
-ANI_RANK_CAP <- tribble(
-  ~ani_level, ~cap_rank,
-  100,        "subspecies",
-  98,         "subspecies",
-  95,         "species",
-  90,         "species",
-  85,         "genus",
-  80,         "genus"
-)
-rank_order <- c(family = 1, genus = 2, species = 3, subspecies = 4)
-
-# ---- Helpers ------------------------------------------------------------
-# Treat NA / "" / bare prefix ("g__", "t__") / "*__unclassified*" placeholders
-# (e.g. EsViritu's "s__unclassified_<Genus>") as unclassified at that rank.
-clean_label <- function(x) {
-  x <- na_if(str_squish(replace_na(as.character(x), "")), "")
-  if_else(is.na(x) | str_detect(x, "_{2}\\s*$") | str_detect(x, "(?i)__unclassified"),
-          NA_character_, x)
-}
-
-# One profile (taxon, rel) per rank vs one truth (taxon, rel): all metrics.
-score_pair <- function(pred, truth) {
-  j <- full_join(pred, truth, by = "taxon",
-                 suffix = c("_p", "_t")) |>
-    mutate(rel_p = replace_na(rel_p, 0), rel_t = replace_na(rel_t, 0))
-  tp <- sum(j$rel_p > 0 & j$rel_t > 0)
-  fp <- sum(j$rel_p > 0 & j$rel_t == 0)
-  fn <- sum(j$rel_p == 0 & j$rel_t > 0)
-  prec <- if (tp + fp > 0) tp / (tp + fp) else NA_real_
-  rec  <- if (tp + fn > 0) tp / (tp + fn) else NA_real_
-  bc   <- if (sum(j$rel_p + j$rel_t) > 0)
-            sum(abs(j$rel_p - j$rel_t)) / sum(j$rel_p + j$rel_t) else NA_real_
-  pear <- if (sd(j$rel_p) > 0 && sd(j$rel_t) > 0) cor(j$rel_p, j$rel_t) else NA_real_
-  spear<- if (sd(j$rel_p) > 0 && sd(j$rel_t) > 0)
-            cor(j$rel_p, j$rel_t, method = "spearman") else NA_real_
-  tibble(n_pred = tp + fp, n_truth = tp + fn, TP = tp, FP = fp, FN = fn,
-         precision = prec, recall = rec,
-         F1 = if (!is.na(prec) && !is.na(rec) && prec + rec > 0)
-                2 * prec * rec / (prec + rec) else NA_real_,
-         bray_curtis = bc, pearson = pear, spearman = spear)
-}
-
-u <- read_tsv(unified_path, show_col_types = FALSE) |>
-  mutate(across(all_of(ranks), clean_label),
-         base_tool = factor_tool(tool)) |>
-  group_by(tool, param_set, sample) |>
-  mutate(rel = count / sum(count, na.rm = TRUE)) |>
-  ungroup()
-
-gt <- map_dfr(gt_files, ~ read_tsv(.x, show_col_types = FALSE) |>
-                mutate(sample = str_extract(basename(.x), "[a-z_]+\\d+"))) |>
-  mutate(across(all_of(ranks), clean_label),
-         rel = read_count / sum(read_count), .by = sample) |>
-  left_join(ANI_RANK_CAP, by = "ani_level")
-
-metrics <- map_dfr(ranks, function(rk) {
-  pred_rk <- u |>
-    mutate(taxon = .data[[rk]]) |>
-    filter(!is.na(taxon)) |>
-    summarise(rel = sum(rel),
-              .by = c(base_tool, tool, param_set, sample, taxon))
-  map_dfr(c("strict", "capped"), function(mode) {
-    truth_rk <- gt |>
-      { \(d) if (mode == "capped")
-               filter(d, rank_order[cap_rank] >= rank_order[[rk]]) else d }() |>
-      mutate(taxon = .data[[rk]]) |>
-      filter(!is.na(taxon)) |>
-      summarise(rel = sum(rel), .by = c(sample, taxon))
-
-    pred_rk |>
-      group_by(base_tool, tool, param_set, sample) |>
-      group_modify(~ score_pair(
-        select(.x, taxon, rel),
-        filter(truth_rk, sample == .y$sample) |> select(taxon, rel))) |>
-      ungroup() |>
-      mutate(rank = rk, truth_mode = mode)
-  })
-})
-
-metrics <- metrics |>
-  mutate(rank = factor(rank, levels = ranks),
-         base_tool = factor(base_tool, levels = tool_labels[tool_levels]))
 save_tab(metrics, "profile_vs_truth_metrics.csv")
 message("rows: ", nrow(metrics))
 ```
 
 ```{r}
 fit_metric <- function(df, metric) {
-  f <- reformulate(c("base_tool * rank", "sample"), response = metric)
-  m <- lm(f, data = df)
-  emm <- emmeans(m, ~ base_tool | rank)   # averages over the sample blocks
+  d <- df |>
+    filter(!is.na(.data[[metric]])) |>
+    droplevels()
+  f <- as.formula(paste0(metric, " ~ base_tool * rank + (1 | sample)"))
+  m <- lmer(f, data = d, REML = TRUE)
+  emm <- emmeans(m, ~ base_tool | rank, lmer.df = "kenward-roger")
   contr <- contrast(emm, "trt.vs.ctrl", ref = 1, adjust = "BH") |>
     as_tibble() |> mutate(metric = metric)
+  random_sd <- as.data.frame(VarCorr(m))$sdcor[1]
   list(model = m,
        emmeans = as_tibble(emm) |> mutate(metric = metric),
-       contrasts = contr)
+       contrasts = contr,
+       diagnostics = tibble(metric = metric, n = nobs(m),
+                            n_samples = n_distinct(d$sample),
+                            sample_random_intercept_sd = random_sd,
+                            singular = isSingular(m)))
 }
 
 ```
@@ -677,7 +730,15 @@ Abundance Calibration
 
 g_all <- read_tsv(paths$genome, show_col_types = FALSE) |>
   mutate(base_tool = as.character(factor_tool(tool)),
-         detected  = as.logical(detected))
+         detected  = as.logical(detected))|>
+  filter(
+    base_tool != "Sylph",
+    !grepl("ptaxnone", param_set)
+    ) |>
+  mutate(true_log = case_when(read_count > 0 ~ log10(read_count), TRUE ~ 0),
+         pred_log = case_when(assigned_reads > 0 ~ log10(assigned_reads), TRUE ~ 0)
+         )
+
 
 # Headline param set per tool by mean detection of truth taxa (full data,
 # before subsetting to detected taxa).
@@ -719,10 +780,26 @@ calib <- g_strata |>
          stratum   = factor(stratum, levels = c("pooled", "resolvable")))
 print(calib)
 save_tab(calib, "abundance_calibration.csv")
+
+# all
+g_all_strata <- bind_rows(
+  g_all |> mutate(stratum = "pooled"),
+  g_all |> filter(ani_level >= 95, n_truth_sharing_clade == 1) |>
+    mutate(stratum = "resolvable")
+)
+
+g_all_calib <- g_all_strata |>
+  group_by(stratum, base_tool, param_set) |>
+  group_modify(~ calib_stats(.x)) |>
+  ungroup() |>
+  mutate(base_tool = factor(base_tool, levels = tool_labels[tool_levels]),
+         stratum   = factor(stratum, levels = c("pooled", "resolvable")))
+print(g_all_calib)
+save_tab(g_all_calib, "all_params_abundance_calibration.csv")
 ```
 
 ```{r}
-p_scatter <- g |>
+p_scatter <- g_all |>   # detected truth taxa
   mutate(base_tool = factor(base_tool, levels = tool_labels[tool_levels]),
          resolvable = ani_level >= 95 & n_truth_sharing_clade == 1) |>
   ggplot(aes(true_log, pred_log)) +
@@ -732,7 +809,8 @@ p_scatter <- g |>
               aes(colour = "all (pooled)")) +
   geom_smooth(data = ~ filter(.x, resolvable), method = "lm", se = FALSE,
               linewidth = 0.8, aes(colour = "resolvable")) +
-  facet_wrap(~ base_tool) +
+  ylim(c(-0.3, 3.5)) +
+  facet_wrap(c(~base_tool, ~param_set)) +
   scale_colour_manual(values = c("all (pooled)" = "grey40",
                                  "resolvable" = "#2c7fb8",
                                  "TRUE" = "#2c7fb8", "FALSE" = "grey70"),
@@ -749,12 +827,14 @@ p_scatter
 ```{r}
 
 # Slope by tool x stratum (1.0 = perfect calibration).
-p_slope <- calib |>
-  ggplot(aes(reorder(base_tool, slope), slope,
+p_slope <- g_all_calib |>
+  mutate(tool_param = paste0(base_tool, "\n", param_set)) |>
+  ggplot(aes(reorder(tool_param, slope), slope,
              colour = tolower(as.character(base_tool)), shape = stratum)) +
   geom_hline(yintercept = 1, linetype = 2, colour = "grey50") +
   geom_point(size = 3, position = position_dodge(width = 0.4)) +
   coord_flip() +
+  facet_wrap(~base_tool, scales = "free_y", ncol = 1) +
   scale_colour_manual(values = tool_palette, guide = "none") +
   labs(x = NULL, y = "Predicted-vs-true slope (1.0 = perfect)", shape = NULL,
        title = "Calibration slope: pooled vs resolvable genomes") +
@@ -843,6 +923,36 @@ save_fig(p_f1, "param_robustness_F1.pdf", w = 9, h = 4.5)
 p_f1
 ```
 
+```{r}
+sweep_mock <- metrics |>
+  filter(!grepl("ptaxnone", param_set)) |>
+  group_by(base_tool, param_set, truth_mode, rank, sample) |>
+  summarise(
+    mean_F1 = mean(F1, na.rm = TRUE),
+    mean_bray_curtis_rpm = mean(bray_curtis_rpm, na.rm = TRUE),
+    mean_precision = mean(precision, na.rm = TRUE),
+    mean_recall = mean(recall, na.rm = TRUE),
+    .groups = "drop"
+  )
+save_tab(sweep_mock, "supplemental_mock_parameter_sweep.csv")
+
+p_sweep_mock <- sweep_mock |>
+  pivot_longer(c(mean_F1, mean_bray_curtis_rpm, mean_precision, mean_recall),
+               names_to = "metric", values_to = "value") |>
+  ggplot(aes(param_set, value, shape = rank, fill = tolower(as.character(base_tool)), group = base_tool)) +
+  #geom_jitter(height = 0, width = 0.2, size = 2) +
+  geom_point(aes(group = rank), position = position_dodge(width = 0.65), size = 2.5) +
+  facet_grid(metric + truth_mode ~ base_tool, scales = "free_x", space = "free_x") +
+  scale_fill_manual(values = tool_palette, guide = "none") +
+  scale_shape_manual(values = c(21, 22, 23, 24, 25)) +
+  labs(x = "Parameter set", y = "Mean across mock communities",
+       title = "Supplemental: full mock-community parameter sweep") +
+  theme_bench() +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1))
+p_sweep_mock
+save_fig(p_sweep_mock, "supplemental_mock_parameter_sweep.pdf", w = 13, h = 9)
+```
+
 Capping vs Strict Taxonomy for Divergent Genomes
 ```{r}
 # ---- Headline summary: declared param set per tool ----------------------
@@ -867,9 +977,12 @@ mock |> distinct(base_tool, param_set) |> arrange(base_tool) |> print()
 res <- map(set_names(c("F1", "bray_curtis", "pearson")), ~ fit_metric(mock, .x))
 emm_all  <- map_dfr(res, "emmeans")
 con_all  <- map_dfr(res, "contrasts")
+diag_all <- map_dfr(res, "diagnostics")
 save_tab(emm_all, "mock_lmm_emmeans.csv")
 save_tab(con_all, "mock_lmm_contrasts.csv")
+save_tab(diag_all, "mock_lmm_diagnostics.csv")
 print(con_all, n = Inf)
+print(diag_all, n = Inf)
 
 p <- emm_all |>
   mutate(metric = recode(metric, bray_curtis = "Bray-Curtis",
@@ -898,16 +1011,24 @@ save_tab(summary_tbl, "profile_vs_truth_summary.csv")
 print(summary_tbl, n = Inf)
 ```
 
+
 ```{r}
-# plot
-cap_bc_p <- metrics |>
+key_metrics <- metrics |>
+  filter(
+    #base_tool != "Sylph",
+    !grepl("ptaxnone", param_set)
+    ) |>
   inner_join(headline, by = c("base_tool", "tool", "param_set")) |>
-  mutate(base_tool = fct_relevel(base_tool, "EsViritu", "Centrifuger", "Kraken2", "Metabuli", "Sylph")) |>
-  ggplot(aes(base_tool, 
-             .data[["bray_curtis"]], 
-             fill = tolower(as.character(base_tool))
-             )
-         ) +
+  filter(truth_mode == "capped") |>
+  select(
+    c(base_tool, F1, bray_curtis, pearson, spearman)
+  ) |>
+  pivot_longer(!base_tool, names_to = "metric", values_to = "score") |>
+  mutate(base_tool = fct_relevel(base_tool, "EsViritu", "Centrifuger", "Kraken2", "Metabuli", "Sylph"))
+
+
+keym_p <- key_metrics |>
+  ggplot(aes(x = base_tool, y = score, fill = tolower(as.character(base_tool)))) +
   geom_point(
     position = position_jitterdodge(
       jitter.width = 0.1,
@@ -918,119 +1039,37 @@ cap_bc_p <- metrics |>
     shape = 21,
     color = "grey10"
     ) +
-  facet_wrap(c(~truth_mode, ~rank), nrow = 2) +
+  facet_wrap(~metric, nrow = 1) +
   scale_fill_manual(values = tool_palette, name = "Tool",
                       labels = function(x) tool_labels[x]) +
   stat_compare_means(
     comparisons = list(
       c("EsViritu", "Centrifuger"),
       c("EsViritu", "Kraken2"),
-      c("EsViritu", "Metabuli"),
-      c("EsViritu", "Sylph")
+      c("EsViritu", "Metabuli")
       ),
-    method = "wilcox.test", 
+    method = "t.test", 
     label = "p.signif",
-    vjust = 0.8
+    vjust = 0.6,
+    tip.length = 0
   ) +
-  labs(x = "Taxonomic rank", y = "Bray-Curtis dissimilarity",
-       title = paste0("Bray-Curtis dissimilarity: strict vs divergence-capped truth")) +
-  ylim(c(0, 1.5)) +
   theme_bench() +
+  labs(
+    x = "Tool (headline parameters)",
+    y = "Metric Score"
+  ) +
   theme(axis.text.x = element_text(angle = 60, hjust = 1))
 
-save_fig(cap_bc_p, "capped_vs_strict_mock_bc.pdf", w = 8, h = 6)
+keym_p
 
-cap_bc_p
+save_fig(keym_p, "capped_key_metrics_mock1.pdf", w = 6, h = 4)
 ```
 
-```{r}
-# plot
-cap_f1_p <- metrics |>
-  inner_join(headline, by = c("base_tool", "tool", "param_set")) |>
-  mutate(base_tool = fct_relevel(base_tool, "EsViritu", "Centrifuger", "Kraken2", "Metabuli", "Sylph")) |>
-  ggplot(aes(base_tool, 
-             .data[["F1"]], 
-             fill = tolower(as.character(base_tool))
-             )
-         ) +
-  geom_point(
-    position = position_jitterdodge(
-      jitter.width = 0.1,
-      dodge.width = 0.6
-    ),
-    size = 3, 
-    alpha = 0.8,
-    shape = 21,
-    color = "grey10"
-    ) +
-  facet_wrap(c(~truth_mode, ~rank), nrow = 2) +
-  scale_fill_manual(values = tool_palette, name = "Tool",
-                      labels = function(x) tool_labels[x]) +
-  stat_compare_means(
-    comparisons = list(
-      c("EsViritu", "Centrifuger"),
-      c("EsViritu", "Kraken2"),
-      c("EsViritu", "Metabuli"),
-      c("EsViritu", "Sylph")
-      ),
-    method = "wilcox.test", 
-    label = "p.signif",
-    vjust = 0.8
-  ) +
-  labs(x = "Taxonomic rank", y = "F1 Score",
-       title = paste0("F1 Score: strict vs divergence-capped truth")) +
-  ylim(c(0, 1.5)) +
-  theme_bench() +
-  theme(axis.text.x = element_text(angle = 60, hjust = 1))
-
-save_fig(cap_f1_p, "capped_vs_strict_mock_f1.pdf", w = 8, h = 6)
-
-cap_f1_p
-```
 
 ```{r}
-# plot
-cap_pear_p <- metrics |>
-  inner_join(headline, by = c("base_tool", "tool", "param_set")) |>
-  mutate(base_tool = fct_relevel(base_tool, "EsViritu", "Centrifuger", "Kraken2", "Metabuli", "Sylph")) |>
-  ggplot(aes(base_tool, 
-             .data[["pearson"]], 
-             fill = tolower(as.character(base_tool))
-             )
-         ) +
-  geom_point(
-    position = position_jitterdodge(
-      jitter.width = 0.1,
-      dodge.width = 0.6
-    ),
-    size = 3, 
-    alpha = 0.8,
-    shape = 21,
-    color = "grey10"
-    ) +
-  facet_wrap(c(~truth_mode, ~rank), nrow = 2) +
-  scale_fill_manual(values = tool_palette, name = "Tool",
-                      labels = function(x) tool_labels[x]) +
-  stat_compare_means(
-    comparisons = list(
-      c("EsViritu", "Centrifuger"),
-      c("EsViritu", "Kraken2"),
-      c("EsViritu", "Metabuli"),
-      c("EsViritu", "Sylph")
-      ),
-    method = "wilcox.test", 
-    label = "p.signif",
-    vjust = 0.8
-  ) +
-  labs(x = "Taxonomic rank", y = "F1 Score",
-       title = paste0("Pearson Correlation: strict vs divergence-capped truth")) +
-  ylim(c(-0.15, 1.5)) +
-  theme_bench() +
-  theme(axis.text.x = element_text(angle = 60, hjust = 1))
-
-save_fig(cap_pear_p, "capped_vs_strict_mock_pearson.pdf", w = 8, h = 6)
-
-cap_pear_p
+u <- read_tsv(
+  here::here("data/mock_virome/unified_long.tsv")
+)
 ```
 
 
@@ -1047,16 +1086,16 @@ perfam_p <- u |>
     grepl("_fam", sample),
     !grepl("ptaxnone", param_set)
     ) |>
-  group_by(tool, sample, param_set, family, base_tool) |>
+  group_by(tool, sample, param_set, family) |>
   summarize(n = n()) |>
   ungroup() |>
   mutate(tool = fct_relevel(tool, "esviritu", "centrifuger", "kraken2", "metabuli", "sylph")) |>
-  ggplot(aes(x = param_set, y = n, color = tolower(as.character(base_tool)))) +
+  ggplot(aes(x = param_set, y = n, color = tolower(as.character(tool)))) +
   geom_jitter(height = 0, width = 0.1, alpha = 0.5) +
   geom_hline(yintercept = 1, linetype = "dashed", alpha = 0.5) +
   scale_color_manual(values = tool_palette, name = "Tool",
                       labels = function(x) tool_labels[x]) +
-  facet_grid(cols = vars(base_tool), scales = "free_x", space = "free") +
+  facet_grid(cols = vars(tool), scales = "free_x", space = "free") +
   scale_y_log10() +
   labs(x = "Parameters", 
        y = "# Classifications per Family",

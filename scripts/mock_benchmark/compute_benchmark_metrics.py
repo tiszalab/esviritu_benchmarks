@@ -91,7 +91,10 @@ def main():
         meta = {"tool": tool, "param_set": param, "sample": sample}
         for r in rrows:
             rank_rows.append({**meta, **r})
-        ani_rows.append({**meta, **arow})
+        if arow is not None:
+            ani_rows.append({**meta, **arow})
+        else:
+            print(f"Skipping ANI-capped metrics for {sample}: not one genome per family", file=sys.stderr)
         for g in grows:
             genome_rows.append({**meta, **g})
 

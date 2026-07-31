@@ -5,12 +5,16 @@ Analyze positive control benchmarks: detection sensitivity by tool, read count, 
 
 import os
 import re
+import sys
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import polars as pl
 from plotnine import *
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from control_read_units import positive_count_to_read_pairs
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 BASE_DIR = Path("/data/tisza/analyses/mjt_projects/esviritu_benchmarks/benchmarks_positive1")
@@ -324,10 +328,20 @@ def main():
     # Join genome info
     combined = combined.join(GENOME_INFO, on="accession", how="left")
 
-    # Compute detection metric: fraction of input reads classified to correct family
+    # Compute detection metric: fraction of input read pairs classified to correct family
     combined = combined.with_columns(
-        (pl.col("correct_family_reads") / pl.col("read_count")).alias("sensitivity"),
+        pl.col("read_count").alias("input_read_pairs"),
+        pl.struct("tool", "detected_reads").map_elements(
+            lambda x: positive_count_to_read_pairs(x["tool"], x["detected_reads"]),
+            return_dtype=pl.Float64,
+        ).alias("detected_read_pairs"),
+        pl.struct("tool", "correct_family_reads").map_elements(
+            lambda x: positive_count_to_read_pairs(x["tool"], x["correct_family_reads"]),
+            return_dtype=pl.Float64,
+        ).alias("correct_family_read_pairs"),
         (pl.col("correct_family_reads") > 0).cast(pl.Int8).alias("detected"),
+    ).with_columns(
+        (pl.col("correct_family_read_pairs") / pl.col("input_read_pairs")).alias("sensitivity"),
     )
 
     # Save combined table

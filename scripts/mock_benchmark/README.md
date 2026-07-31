@@ -39,7 +39,8 @@ python scripts/benchmark/compute_benchmark_metrics.py \
 ## Outputs (`benchmarks_mock/analysis/`)
 
 - **`unified_long.tsv`** — every tool/param/sample taxon projected onto the lineage backbone.
-- **`rank_metrics.tsv`** — per tool × param × sample × rank (family/genus/species):
+- **`rank_metrics.tsv`** — per tool × param × sample × strict rank
+  (family/genus/species/subspecies) plus one ANI-capped row (`rank=ani_capped`):
   `bray_curtis_rpm` (**primary**), `bray_curtis_rel`, `truth_total_rpm` /
   `pred_total_rpm` (recovery diagnostics), detection
   (`TP/FP/FN/precision/recall/F1`), abundance (`pearson/spearman/l1/l2`).
@@ -56,18 +57,20 @@ python scripts/benchmark/compute_benchmark_metrics.py \
 
 ## ANI-aware scoring
 
-Each ground-truth genome is scored at the deepest rank it can plausibly be
+Strict rows evaluate every truth genome at each rank. The ANI-capped row
+scores each ground-truth genome at the deepest rank it can plausibly be
 recovered at, given its mutation ANI (edit `DEFAULT_ANI_TIERS` in `metrics.py`):
 
 | ANI | expected rank |
 |-----|---------------|
-| 100, 98 | species |
-| 95, 90 | genus |
-| 85, 80 | family |
+| 100, 98 | subspecies |
+| 95, 90 | species |
+| 85, 80 | genus |
 
-If a genome is unclassified at its expected rank (e.g. no genus), it falls back
-to the deepest classified ancestor. Subspecies/strain (`t__`) is folded into
-species (`EVAL_RANKS`).
+ANI-capped scoring requires one truth genome per family. Prediction counts are
+then mapped to the cap of the unique matching truth family; unmatched families
+remain false-positive taxa. If this invariant is not met, metric calculation
+fails rather than assigning shared clade mass ambiguously.
 
 ## Bray-Curtis: RPM (primary) vs relative
 
