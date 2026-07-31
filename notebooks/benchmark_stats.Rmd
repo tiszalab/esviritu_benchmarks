@@ -41,6 +41,9 @@ tool_palette <- c(esviritu = "#90D4CC", centrifuger = "#FBA72A",
 
 # Headline parameter-set selection for all headline comparisons.
 HEADLINE_PARAM_MODE <- "manual"
+
+# these are based on inspection of postive and negative control results.
+# We want the parameters with low false positive rate and then maximize true positive rate
 headline_params_manual <- c(
   esviritu    = "sr",
   centrifuger = "mhl100_ms0",
@@ -268,6 +271,7 @@ p_curve <- curve |>
   theme_bench()
 save_fig(p_curve, "pos_detection_curves.pdf", w = 7, h = 4.5)
 
+p_curve
 ```
 
 ```{r}
@@ -370,10 +374,16 @@ print(ld50 |> arrange(base_tool, ANI), n = Inf)
 
 p_ld50 <- ld50 |>
   ggplot(aes(ANI, ld50_plot, colour = base_tool, group = base_tool)) +
-  geom_line(data = ~ filter(.x, censoring == "estimable"), linewidth = 0.8) +
-  geom_linerange(data = ~ filter(.x, censoring == "estimable"),
-                 aes(ymin = ld50_lo_plot, ymax = ld50_hi_plot), linewidth = 0.5) +
-  geom_point(aes(shape = censoring), size = 2) +
+  geom_line(
+    #data = ~ filter(.x, censoring == "estimable"), 
+    linewidth = 0.8
+    ) +
+  geom_linerange(
+    data = ~ filter(.x, censoring == "estimable"),
+    aes(ymin = ld50_lo_plot, ymax = ld50_hi_plot), 
+    linewidth = 0.5
+    ) +
+  geom_point(aes(shape = censoring), size = 4) +
   scale_y_log10(limits = c(1, 1000)) +
   scale_shape_manual(values = c(estimable = 16, left_censored = 25,
                                 right_censored = 24, non_increasing = 4,
@@ -410,10 +420,16 @@ save_tab(ld50_all, "pos_ld50_per_genome_all_params.csv")
 
 p_ld50_all <- ld50_all |>
   ggplot(aes(ANI, ld50_plot, colour = base_tool, group = param_set)) +
-  geom_line(data = ~ filter(.x, censoring == "estimable"), linewidth = 0.6, alpha = 0.9) +
-  geom_linerange(data = ~ filter(.x, censoring == "estimable"),
-                 aes(ymin = ld50_lo_plot, ymax = ld50_hi_plot), alpha = 0.35) +
-  geom_point(aes(shape = censoring), size = 1.5) +
+  geom_line(
+    #data = ~ filter(.x, censoring == "estimable"), 
+    linewidth = 0.6, 
+    alpha = 0.9
+    ) +
+  geom_linerange(
+    data = ~ filter(.x, censoring == "estimable"),
+    aes(ymin = ld50_lo_plot, ymax = ld50_hi_plot), alpha = 0.35
+    ) +
+  geom_point(aes(shape = censoring), size = 3) +
   facet_wrap(~ base_tool) +
   scale_y_log10(limits = c(1, 1000)) +
   scale_shape_manual(values = c(estimable = 16, left_censored = 25,
@@ -520,7 +536,7 @@ p <- neg |>
   scale_y_log10() +
   scale_colour_manual(values = tool_palette, guide = "none") +
   labs(x = NULL, y = "False-positive reads (%, log scale)",
-       title = "Negative-control specificity by tool") +
+       title = "Negative-control specificity by tool, headline params") +
   theme_bench() +
   theme(axis.text.x = element_text(angle = 30, hjust = 1))
 save_fig(p, "neg_control_fp.pdf", w = 8, h = 4.5)
@@ -536,7 +552,7 @@ sp_p <- neg |>
   geom_jitter(width = 0.15, height = 0, size = 2, alpha = 0.8) +
   scale_colour_manual(values = tool_palette, guide = "none") +
   labs(x = NULL, y = "False-positive species count",
-       title = "Negative-control specificity by tool") +
+       title = "Negative-control specificity by tool, headline params") +
   theme_bench() +
   theme(axis.text.x = element_text(angle = 30, hjust = 1))
 save_fig(sp_p, "neg_control_spp.pdf", w = 8, h = 4.5)
@@ -556,7 +572,12 @@ neg_full <- merge(
   neg_full,
   sample_info,
   by = "sample"
-)
+) |>
+  # NAs are 0
+  mutate(
+    fp_reads = replace_na(fp_reads, 0),
+    fp_pct = replace_na(fp_pct, 0)
+  )
 
 ```
 
@@ -619,11 +640,11 @@ reads_full_tile_p <- neg_full |>
   scale_fill_gradient2(
     low = "white",
     mid = "orange",
-    high = "purple",
+    high = "#C35BCA",
     na.value = "white",
     limits = c(1e-4, NA)
   ) +
-  geom_text(aes(label = fp_reads)) +
+  geom_text(aes(label = scales::comma(fp_reads) )) +
   facet_grid(c(vars(neg_class),vars(base_tool)), scales = "free_y", space = "free") +
   labs(x = NULL, y = "log10(False-positive assigned reads)",
        title = "Negative-control specificity by tool") +
@@ -648,7 +669,7 @@ sp_full_tile_p <- neg_full |>
   scale_fill_gradient2(
     low = "white",
     mid = "orange",
-    high = "purple",
+    high = "#C35BCA",
     na.value = "white",
     limits = c(1e-4, NA)
   ) +
@@ -709,7 +730,15 @@ Abundance Calibration
 
 g_all <- read_tsv(paths$genome, show_col_types = FALSE) |>
   mutate(base_tool = as.character(factor_tool(tool)),
-         detected  = as.logical(detected))
+         detected  = as.logical(detected))|>
+  filter(
+    base_tool != "Sylph",
+    !grepl("ptaxnone", param_set)
+    ) |>
+  mutate(true_log = case_when(read_count > 0 ~ log10(read_count), TRUE ~ 0),
+         pred_log = case_when(assigned_reads > 0 ~ log10(assigned_reads), TRUE ~ 0)
+         )
+
 
 # Headline param set per tool by mean detection of truth taxa (full data,
 # before subsetting to detected taxa).
@@ -751,10 +780,26 @@ calib <- g_strata |>
          stratum   = factor(stratum, levels = c("pooled", "resolvable")))
 print(calib)
 save_tab(calib, "abundance_calibration.csv")
+
+# all
+g_all_strata <- bind_rows(
+  g_all |> mutate(stratum = "pooled"),
+  g_all |> filter(ani_level >= 95, n_truth_sharing_clade == 1) |>
+    mutate(stratum = "resolvable")
+)
+
+g_all_calib <- g_all_strata |>
+  group_by(stratum, base_tool, param_set) |>
+  group_modify(~ calib_stats(.x)) |>
+  ungroup() |>
+  mutate(base_tool = factor(base_tool, levels = tool_labels[tool_levels]),
+         stratum   = factor(stratum, levels = c("pooled", "resolvable")))
+print(g_all_calib)
+save_tab(g_all_calib, "all_params_abundance_calibration.csv")
 ```
 
 ```{r}
-p_scatter <- g |>
+p_scatter <- g_all |>   # detected truth taxa
   mutate(base_tool = factor(base_tool, levels = tool_labels[tool_levels]),
          resolvable = ani_level >= 95 & n_truth_sharing_clade == 1) |>
   ggplot(aes(true_log, pred_log)) +
@@ -764,7 +809,8 @@ p_scatter <- g |>
               aes(colour = "all (pooled)")) +
   geom_smooth(data = ~ filter(.x, resolvable), method = "lm", se = FALSE,
               linewidth = 0.8, aes(colour = "resolvable")) +
-  facet_wrap(~ base_tool) +
+  ylim(c(-0.3, 3.5)) +
+  facet_wrap(c(~base_tool, ~param_set)) +
   scale_colour_manual(values = c("all (pooled)" = "grey40",
                                  "resolvable" = "#2c7fb8",
                                  "TRUE" = "#2c7fb8", "FALSE" = "grey70"),
@@ -781,12 +827,14 @@ p_scatter
 ```{r}
 
 # Slope by tool x stratum (1.0 = perfect calibration).
-p_slope <- calib |>
-  ggplot(aes(reorder(base_tool, slope), slope,
+p_slope <- g_all_calib |>
+  mutate(tool_param = paste0(base_tool, "\n", param_set)) |>
+  ggplot(aes(reorder(tool_param, slope), slope,
              colour = tolower(as.character(base_tool)), shape = stratum)) +
   geom_hline(yintercept = 1, linetype = 2, colour = "grey50") +
   geom_point(size = 3, position = position_dodge(width = 0.4)) +
   coord_flip() +
+  facet_wrap(~base_tool, scales = "free_y", ncol = 1) +
   scale_colour_manual(values = tool_palette, guide = "none") +
   labs(x = NULL, y = "Predicted-vs-true slope (1.0 = perfect)", shape = NULL,
        title = "Calibration slope: pooled vs resolvable genomes") +
@@ -878,7 +926,7 @@ p_f1
 ```{r}
 sweep_mock <- metrics |>
   filter(!grepl("ptaxnone", param_set)) |>
-  group_by(base_tool, param_set, truth_mode, rank) |>
+  group_by(base_tool, param_set, truth_mode, rank, sample) |>
   summarise(
     mean_F1 = mean(F1, na.rm = TRUE),
     mean_bray_curtis_rpm = mean(bray_curtis_rpm, na.rm = TRUE),
@@ -891,16 +939,18 @@ save_tab(sweep_mock, "supplemental_mock_parameter_sweep.csv")
 p_sweep_mock <- sweep_mock |>
   pivot_longer(c(mean_F1, mean_bray_curtis_rpm, mean_precision, mean_recall),
                names_to = "metric", values_to = "value") |>
-  ggplot(aes(param_set, value, colour = tolower(as.character(base_tool)), group = base_tool)) +
-  geom_point(size = 2) +
+  ggplot(aes(param_set, value, shape = rank, fill = tolower(as.character(base_tool)), group = base_tool)) +
+  #geom_jitter(height = 0, width = 0.2, size = 2) +
+  geom_point(aes(group = rank), position = position_dodge(width = 0.65), size = 2.5) +
   facet_grid(metric + truth_mode ~ base_tool, scales = "free_x", space = "free_x") +
-  scale_colour_manual(values = tool_palette, guide = "none") +
+  scale_fill_manual(values = tool_palette, guide = "none") +
+  scale_shape_manual(values = c(21, 22, 23, 24, 25)) +
   labs(x = "Parameter set", y = "Mean across mock communities",
        title = "Supplemental: full mock-community parameter sweep") +
   theme_bench() +
   theme(axis.text.x = element_text(angle = 60, hjust = 1))
-save_fig(p_sweep_mock, "supplemental_mock_parameter_sweep.pdf", w = 13, h = 9)
 p_sweep_mock
+save_fig(p_sweep_mock, "supplemental_mock_parameter_sweep.pdf", w = 13, h = 9)
 ```
 
 Capping vs Strict Taxonomy for Divergent Genomes
@@ -961,16 +1011,24 @@ save_tab(summary_tbl, "profile_vs_truth_summary.csv")
 print(summary_tbl, n = Inf)
 ```
 
+
 ```{r}
-# plot
-cap_bc_p <- metrics |>
+key_metrics <- metrics |>
+  filter(
+    #base_tool != "Sylph",
+    !grepl("ptaxnone", param_set)
+    ) |>
   inner_join(headline, by = c("base_tool", "tool", "param_set")) |>
-  mutate(base_tool = fct_relevel(base_tool, "EsViritu", "Centrifuger", "Kraken2", "Metabuli")) |>
-  ggplot(aes(base_tool, 
-             .data[["bray_curtis"]], 
-             fill = tolower(as.character(base_tool))
-             )
-         ) +
+  filter(truth_mode == "capped") |>
+  select(
+    c(base_tool, F1, bray_curtis, pearson, spearman)
+  ) |>
+  pivot_longer(!base_tool, names_to = "metric", values_to = "score") |>
+  mutate(base_tool = fct_relevel(base_tool, "EsViritu", "Centrifuger", "Kraken2", "Metabuli", "Sylph"))
+
+
+keym_p <- key_metrics |>
+  ggplot(aes(x = base_tool, y = score, fill = tolower(as.character(base_tool)))) +
   geom_point(
     position = position_jitterdodge(
       jitter.width = 0.1,
@@ -981,7 +1039,7 @@ cap_bc_p <- metrics |>
     shape = 21,
     color = "grey10"
     ) +
-  facet_wrap(c(~truth_mode, ~rank), nrow = 1) +
+  facet_wrap(~metric, nrow = 1) +
   scale_fill_manual(values = tool_palette, name = "Tool",
                       labels = function(x) tool_labels[x]) +
   stat_compare_means(
@@ -990,208 +1048,23 @@ cap_bc_p <- metrics |>
       c("EsViritu", "Kraken2"),
       c("EsViritu", "Metabuli")
       ),
-    method = "wilcox.test", 
+    method = "t.test", 
     label = "p.signif",
-    vjust = 0.8
+    vjust = 0.6,
+    tip.length = 0
   ) +
-  labs(x = "Taxonomic rank", y = "Bray-Curtis dissimilarity",
-       title = paste0("Bray-Curtis dissimilarity: strict vs divergence-capped truth")) +
-  ylim(c(0, 1.5)) +
   theme_bench() +
+  labs(
+    x = "Tool (headline parameters)",
+    y = "Metric Score"
+  ) +
   theme(axis.text.x = element_text(angle = 60, hjust = 1))
 
-save_fig(cap_bc_p, "capped_vs_strict_mock_bc.pdf", w = 8, h = 6)
+keym_p
 
-cap_bc_p
+save_fig(keym_p, "capped_key_metrics_mock1.pdf", w = 6, h = 4)
 ```
 
-```{r}
-cap_bc_p2 <- metrics |>
-  #inner_join(headline, by = c("base_tool", "tool", "param_set")) |>
-  filter(
-    base_tool != "Sylph",
-    truth_mode == "capped"
-    ) |>
-  mutate(base_tool = fct_relevel(base_tool, "EsViritu", "Centrifuger", "Kraken2", "Metabuli")) |>
-  ggplot(aes(
-    x = param_set, 
-    y = bray_curtis, 
-    fill = tolower(as.character(base_tool))
-    )
-  ) +
-  geom_point(
-    position = position_jitterdodge(
-      jitter.width = 0.1,
-      dodge.width = 0.6
-    ),
-    size = 3, 
-    alpha = 0.8,
-    shape = 21,
-    color = "grey10"
-    ) +
-  facet_grid(. ~ base_tool, scales = "free_x", space = "free_x") +
-  scale_fill_manual(values = tool_palette, name = "Tool",
-                      labels = function(x) tool_labels[x]) +
-#  stat_compare_means(
-#    comparisons = list(
-#      c("EsViritu", "Centrifuger"),
-#      c("EsViritu", "Kraken2"),
-#      c("EsViritu", "Metabuli")
-#      ),
-#    method = "wilcox.test", 
-#    label = "p.signif",
-#    vjust = 0.8
-#  ) +
-  labs(x = "Taxonomic rank", y = "Bray-Curtis dissimilarity",
-       title = paste0("Bray-Curtis dissimilarity: strict vs divergence-capped truth")) +
-  #ylim(c(0, 1.5)) +
-  theme_bench() +
-  theme(axis.text.x = element_text(angle = 60, hjust = 1))
-
-#save_fig(cap_bc_p2, "capped_vs_strict_mock_bc.pdf", w = 8, h = 6)
-
-cap_bc_p2
-```
-
-```{r}
-strict_bc_p2 <- metrics |>
-  #inner_join(headline, by = c("base_tool", "tool", "param_set")) |>
-  filter(
-    base_tool != "Sylph",
-    truth_mode == "strict"
-    ) |>
-  mutate(base_tool = fct_relevel(base_tool, "EsViritu", "Centrifuger", "Kraken2", "Metabuli")) |>
-  ggplot(aes(
-    x = param_set, 
-    y = bray_curtis, 
-    fill = tolower(as.character(base_tool))
-    )
-  ) +
-  geom_point(
-    position = position_jitterdodge(
-      jitter.width = 0.1,
-      dodge.width = 0.6
-    ),
-    size = 3, 
-    alpha = 0.8,
-    shape = 21,
-    color = "grey10"
-    ) +
-  facet_grid(rank ~ base_tool, scales = "free_x", space = "free_x") +
-  scale_fill_manual(values = tool_palette, name = "Tool",
-                      labels = function(x) tool_labels[x]) +
-#  stat_compare_means(
-#    comparisons = list(
-#      c("EsViritu", "Centrifuger"),
-#      c("EsViritu", "Kraken2"),
-#      c("EsViritu", "Metabuli")
-#      ),
-#    method = "wilcox.test", 
-#    label = "p.signif",
-#    vjust = 0.8
-#  ) +
-  labs(x = "Taxonomic rank", y = "Bray-Curtis dissimilarity",
-       title = paste0("Bray-Curtis dissimilarity: strict vs divergence-capped truth")) +
-  #ylim(c(0, 1.5)) +
-  theme_bench() +
-  theme(axis.text.x = element_text(angle = 60, hjust = 1))
-
-#save_fig(cap_bc_p2, "capped_vs_strict_mock_bc.pdf", w = 8, h = 6)
-
-strict_bc_p2
-```
-
-
-
-```{r}
-# plot
-cap_f1_p <- metrics |>
-  inner_join(headline, by = c("base_tool", "tool", "param_set")) |>
-  mutate(base_tool = fct_relevel(base_tool, "EsViritu", "Centrifuger", "Kraken2", "Metabuli", "Sylph")) |>
-  ggplot(aes(base_tool, 
-             .data[["F1"]], 
-             fill = tolower(as.character(base_tool))
-             )
-         ) +
-  geom_point(
-    position = position_jitterdodge(
-      jitter.width = 0.1,
-      dodge.width = 0.6
-    ),
-    size = 3, 
-    alpha = 0.8,
-    shape = 21,
-    color = "grey10"
-    ) +
-  facet_wrap(c(~truth_mode, ~rank), nrow = 2) +
-  scale_fill_manual(values = tool_palette, name = "Tool",
-                      labels = function(x) tool_labels[x]) +
-  stat_compare_means(
-    comparisons = list(
-      c("EsViritu", "Centrifuger"),
-      c("EsViritu", "Kraken2"),
-      c("EsViritu", "Metabuli"),
-      c("EsViritu", "Sylph")
-      ),
-    method = "wilcox.test", 
-    label = "p.signif",
-    vjust = 0.8
-  ) +
-  labs(x = "Taxonomic rank", y = "F1 Score",
-       title = paste0("F1 Score: strict vs divergence-capped truth")) +
-  ylim(c(0, 1.5)) +
-  theme_bench() +
-  theme(axis.text.x = element_text(angle = 60, hjust = 1))
-
-save_fig(cap_f1_p, "capped_vs_strict_mock_f1.pdf", w = 8, h = 6)
-
-cap_f1_p
-```
-
-```{r}
-# plot
-cap_pear_p <- metrics |>
-  inner_join(headline, by = c("base_tool", "tool", "param_set")) |>
-  mutate(base_tool = fct_relevel(base_tool, "EsViritu", "Centrifuger", "Kraken2", "Metabuli", "Sylph")) |>
-  ggplot(aes(base_tool, 
-             .data[["pearson"]], 
-             fill = tolower(as.character(base_tool))
-             )
-         ) +
-  geom_point(
-    position = position_jitterdodge(
-      jitter.width = 0.1,
-      dodge.width = 0.6
-    ),
-    size = 3, 
-    alpha = 0.8,
-    shape = 21,
-    color = "grey10"
-    ) +
-  facet_wrap(c(~truth_mode, ~rank), nrow = 2) +
-  scale_fill_manual(values = tool_palette, name = "Tool",
-                      labels = function(x) tool_labels[x]) +
-  stat_compare_means(
-    comparisons = list(
-      c("EsViritu", "Centrifuger"),
-      c("EsViritu", "Kraken2"),
-      c("EsViritu", "Metabuli"),
-      c("EsViritu", "Sylph")
-      ),
-    method = "wilcox.test", 
-    label = "p.signif",
-    vjust = 0.8
-  ) +
-  labs(x = "Taxonomic rank", y = "F1 Score",
-       title = paste0("Pearson Correlation: strict vs divergence-capped truth")) +
-  ylim(c(-0.15, 1.5)) +
-  theme_bench() +
-  theme(axis.text.x = element_text(angle = 60, hjust = 1))
-
-save_fig(cap_pear_p, "capped_vs_strict_mock_pearson.pdf", w = 8, h = 6)
-
-cap_pear_p
-```
 
 ```{r}
 u <- read_tsv(
