@@ -1,0 +1,121 @@
+---
+title: "Assessing EsViritu Reconstruction Accuracy"
+output: html_notebook
+---
+
+```{r}
+#libraries
+library(ggplot2)
+library(here)
+library(dplyr)
+library(data.table)
+library(stringr)
+library(wesanderson)
+library(tidyr)
+library(forcats)
+```
+
+# Sense reconstructions
+```{r}
+sense_file_list <- list.files(path = here::here("data/mock_virome/reconstructions/"), 
+                        pattern = "sense.alignment_summary.tsv$", 
+                        full.names = TRUE)
+
+
+sense_recon_dt <- rbindlist(lapply(sense_file_list, fread)) |>
+  mutate(ANI = str_extract(query_id, "(?<=ANI)\\d+(?=_)"))
+```
+
+# sr reconstructions
+```{r}
+sr_file_list <- list.files(path = here::here("data/mock_virome/reconstructions/"), 
+                        pattern = "sr.alignment_summary.tsv$", 
+                        full.names = TRUE)
+
+
+sr_recon_dt <- rbindlist(lapply(sr_file_list, fread)) |>
+  mutate(ANI = str_extract(query_id, "(?<=ANI)\\d+(?=_)"))
+```
+
+```{r}
+sr_recon_dt |>
+  group_by(ANI) |>
+  summarize(mean = mean(percent_identity))
+```
+
+```{r}
+sr_p <- sr_recon_dt |>
+  mutate(
+    ANI = as.numeric(ANI)
+         ) |>
+  ggplot(aes(
+    x = (non_n_alignment_columns/query_length), 
+    y = percent_identity, 
+    size = query_length, 
+    color = percent_identity)
+    ) +
+  geom_point(alpha = 0.8) +
+  facet_wrap(~ANI, scales = "free_y") +
+  theme_bw() +
+  labs(
+    title = "EsViritu sr, genome reconstruction accuracy",
+    x = "Genome proportion recovered",
+    y = "Percent Identical to Reference"
+  ) +
+  scale_color_gradient(
+    low = "grey",
+    high = "black"
+  )
+
+sr_p
+```
+
+```{r}
+ggsave(
+  here::here("charts/esv_sr_reconstruction_accuracy1.pdf"),
+  sr_p,
+  width = 6,
+  height = 4
+)
+```
+
+
+```{r}
+sense_p <- sense_recon_dt |>
+  mutate(
+    ANI = as.numeric(ANI)
+         ) |>
+  ggplot(aes(
+    x = (non_n_alignment_columns/query_length), 
+    y = percent_identity, 
+    size = query_length, 
+    color = percent_identity)
+    ) +
+  geom_point(alpha = 0.8) +
+  facet_wrap(~ANI, scales = "free_y") +
+  theme_bw() +
+  labs(
+    title = "EsViritu sense, genome reconstruction accuracy",
+    x = "Genome proportion recovered",
+    y = "Percent Identical to Reference"
+  ) +
+  scale_color_gradient(
+    low = "grey",
+    high = "black"
+  )
+
+sense_p
+```
+
+```{r}
+ggsave(
+  here::here("charts/esv_sense_reconstruction_accuracy1.pdf"),
+  sense_p,
+  width = 6,
+  height = 4
+)
+```
+
+
+
+

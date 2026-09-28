@@ -185,6 +185,11 @@ ggsave(
 ```
 
 ```{r}
+detect_dt |> distinct(sample)
+```
+
+
+```{r}
 detect2_p <- detect_dt |>
   group_by(tool, ani_level, param_set, tool_mode) |>
   summarize(perc_detect = sum(detected == TRUE) / n()) |>
