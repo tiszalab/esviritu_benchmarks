@@ -15,17 +15,17 @@ Python scripts for parsing tool output files:
  - `scripts/scaling/`
 
 
-# notebooks
+# notebooks/
 
 R Notebooks for statistical analysis and plotting of processed tool outputs. 
 
 Uses data in `data/` (see below).
 
-# stats
+# stats/
 
 Tabular files summarizing stats from analysis notebooks.
 
-# data
+# data/
 
 To download data for running R Notebooks download and unpack !LINK in to this repo's home directory.
 
