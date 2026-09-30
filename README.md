@@ -27,6 +27,5 @@ Tabular files summarizing stats from analysis notebooks.
 
 # data/
 
-To download data for running R Notebooks download and unpack !LINK in to this repo's home directory.
+To download data for running R Notebooks download and unpack [zenodo data](https://zenodo.org/records/23043160/files/esviritu_benchmarks_data.tar.gz) in to this repo's home directory.
 
-To download the raw read files, see instructions at !LINK.
